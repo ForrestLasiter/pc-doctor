@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PC Doctor",
+  "version": "0.1.0",
+  "identifier": "com.forrest-lasiter.pc-doctor",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "PC Doctor",
+        "width": 820,
+        "height": 720,
+        "minWidth": 640,
+        "minHeight": 520,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "Forrest Lasiter",
+    "shortDescription": "Scan and fix common Windows problems",
+    "longDescription": "PC Doctor scans your PC for common issues (temp file bloat, low disk space, stuck services, pending Windows updates, malware) and fixes them with one click.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

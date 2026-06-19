@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PC Doctor</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <main class="app">
+      <header>
+        <div class="brand">
+          <img src="/assets/logo.svg" alt="" class="brand-logo" />
+          <div>
+            <h1>PC Doctor</h1>
+            <p class="tagline">Quick checkups and fixes for your PC</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button id="scan-btn" class="btn-primary">Scan for problems</button>
+          <button id="fix-all-btn" class="btn-accent" disabled>Fix All</button>
+          <button id="history-btn" class="btn-ghost">History</button>
+        </div>
+      </header>
+      <p id="status-line" class="status-line">Click "Scan for problems" to begin.</p>
+      <div id="summary-bar" class="summary-bar hidden">
+        <span class="summary-pill summary-ok"><strong id="summary-ok-count">0</strong> healthy</span>
+        <span class="summary-pill summary-issue"><strong id="summary-issue-count">0</strong> need attention</span>
+      </div>
+      <ul id="check-list" class="check-list"></ul>
+      <div id="history-panel" class="history-panel hidden">
+        <div class="history-header">
+          <h2>Run History</h2>
+          <button id="close-history-btn">Close</button>
+        </div>
+        <pre id="history-content" class="history-content"></pre>
+      </div>
+    </main>
+  </body>
+</html>
