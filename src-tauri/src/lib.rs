@@ -51,7 +51,7 @@ fn checks() -> Vec<CheckInfo> {
         CheckInfo {
             id: "windows_updates",
             name: "Windows Updates",
-            description: "Checks for available Windows updates and installs them (installs the PSWindowsUpdate module first if needed).",
+            description: "Checks for available Windows updates and installs them. If the PSWindowsUpdate module isn't already present, this installs it from the PowerShell Gallery and trusts that repository system-wide.",
         },
         CheckInfo {
             id: "windows_update_service",
