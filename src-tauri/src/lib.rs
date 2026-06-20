@@ -4,8 +4,12 @@ use std::io::Write;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::mpsc;
+use std::time::Duration;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+const LONG_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Serialize, Clone)]
 struct CheckInfo {
@@ -87,7 +91,11 @@ fn checks() -> Vec<CheckInfo> {
 }
 
 fn run_ps(script: &str) -> (bool, String) {
-    let output = Command::new("powershell.exe")
+    run_ps_with_timeout(script, DEFAULT_TIMEOUT)
+}
+
+fn run_ps_with_timeout(script: &str, timeout: Duration) -> (bool, String) {
+    let child = match Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -97,10 +105,23 @@ fn run_ps(script: &str) -> (bool, String) {
             script,
         ])
         .creation_flags(CREATE_NO_WINDOW)
-        .output();
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => return (false, format!("Failed to launch powershell: {}", e)),
+    };
 
-    match output {
-        Ok(out) => {
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = child.wait_with_output();
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(out)) => {
             let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
             let combined = if stderr.is_empty() {
@@ -110,7 +131,20 @@ fn run_ps(script: &str) -> (bool, String) {
             };
             (out.status.success(), combined)
         }
-        Err(e) => (false, format!("Failed to launch powershell: {}", e)),
+        Ok(Err(e)) => (false, format!("Failed to run powershell: {}", e)),
+        Err(_) => {
+            let _ = Command::new("taskkill.exe")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+            (
+                false,
+                format!(
+                    "Timed out after {}s. This can happen on the first run if a required PowerShell module needs to be downloaded over a slow connection — try again once it's installed.",
+                    timeout.as_secs()
+                ),
+            )
+        }
     }
 }
 
@@ -218,7 +252,7 @@ fn scan_check(id: String) -> ScanResult {
                     "ERROR: $($_.Exception.Message)"
                 }
             "#;
-            let (ok, out) = run_ps(script);
+            let (ok, out) = run_ps_with_timeout(script, LONG_TIMEOUT);
             let trimmed = out.trim();
             if !ok || trimmed.starts_with("ERROR:") {
                 return ScanResult { status: "error".into(), detail: trimmed.to_string() };
@@ -398,7 +432,7 @@ fn fix_check(id: String) -> FixResult {
                     "Could not install updates: $($_.Exception.Message)"
                 }
             "#;
-            let (ok, out) = run_ps(script);
+            let (ok, out) = run_ps_with_timeout(script, LONG_TIMEOUT);
             FixResult { success: ok, output: out }
         }
         "windows_update_service" => {
