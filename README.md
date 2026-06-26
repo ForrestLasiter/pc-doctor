@@ -30,6 +30,28 @@ Checks that detect Steam or Epic Games aren't installed report healthy automatic
 
 Each check can be scanned individually or fixed with "Fix All." Scans run several checks concurrently to finish faster. A run history is kept locally so you can see what's been done over time.
 
+## Installing on Windows
+
+Download the latest `PC Doctor_x.y.z_x64-setup.exe` from the [Releases page](../../releases) and run it.
+
+**You'll probably see a blue "Windows protected your PC" warning.** That's Windows SmartScreen, and it shows up for any app that isn't signed with a paid certificate — not a sign that anything is wrong. PC Doctor is free and open-source, so you can read exactly what it does in [`src-tauri/src/lib.rs`](src-tauri/src/lib.rs) before installing. To continue:
+
+1. Click **More info** on the warning.
+2. Click **Run anyway**.
+3. Follow the setup wizard (Next → Install → Finish).
+
+You only have to do this once per download. PC Doctor needs administrator rights to repair Windows components, so you'll also get a "Do you want to allow this app to make changes?" prompt — click **Yes**.
+
+### Verifying your download (optional)
+
+Each release includes a `SHA256SUMS.txt` file. To confirm your installer wasn't tampered with, open PowerShell where you downloaded it and run:
+
+```powershell
+Get-FileHash ".\PC Doctor_0.5.0_x64-setup.exe" -Algorithm SHA256
+```
+
+The hash it prints should match the one in `SHA256SUMS.txt` for that file.
+
 ## Why
 
 Most "PC cleaner" tools are bloated, ad-laden, or push you toward paid upsells for things Windows can already do for free via PowerShell. PC Doctor is meant to be a small, transparent alternative: every scan and fix is a short, readable PowerShell command (visible in [`src-tauri/src/lib.rs`](src-tauri/src/lib.rs)), there's no telemetry or bundled third-party software, and nothing is changed on your system without you clicking a button.

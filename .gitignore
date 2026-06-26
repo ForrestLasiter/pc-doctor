@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 PCDoctor-trial-v0.1.0.zip
+
+# Generated at release time by scripts/checksums.ps1
+SHA256SUMS.txt
