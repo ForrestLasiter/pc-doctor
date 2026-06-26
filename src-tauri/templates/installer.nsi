@@ -339,7 +339,11 @@ Function PageLeaveReinstall
       ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
       ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
       ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
-      StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
+      ; PC Doctor customization: run the old uninstaller silently (/S) so the
+      ; user only ever sees the install wizard, never a separate uninstall
+      ; window. /S must come before the _?= directory argument, and _?= keeps
+      ; the uninstaller running in place so ExecWait actually waits for it.
+      StrCpy $R1 "$R1 /S _?=$4" ; append silent flag + uninstall directory
       ExecWait '$R1' $0
     ${EndIf}
 
