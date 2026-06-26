@@ -107,6 +107,20 @@ async function ensureRestorePoint() {
   }
 }
 
+const SCAN_CONCURRENCY = 5;
+
+async function runWithConcurrency(items, limit, worker) {
+  let nextIndex = 0;
+  async function runNext() {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex++];
+      await worker(item);
+    }
+  }
+  const lanes = Array.from({ length: Math.min(limit, items.length) }, runNext);
+  await Promise.all(lanes);
+}
+
 async function scanAll() {
   scanBtn.disabled = true;
   fixAllBtn.disabled = true;
@@ -119,7 +133,7 @@ async function scanAll() {
 
   let issueCount = 0;
 
-  for (const check of checks) {
+  await runWithConcurrency(checks, SCAN_CONCURRENCY, async (check) => {
     const li = checkList.querySelector(`[data-id="${check.id}"]`);
     const detailEl = li.querySelector(".check-detail");
     setBadge(li, "scanning");
@@ -138,7 +152,7 @@ async function scanAll() {
       setBadge(li, "error");
     }
     updateSummary();
-  }
+  });
 
   await logEvent(`Scan complete. ${issueCount} issue(s) found.`);
   statusLine.textContent = `Scan complete. ${issueCount} issue(s) found.`;
