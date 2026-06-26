@@ -87,6 +87,26 @@ fn checks() -> Vec<CheckInfo> {
             name: "Startup Programs",
             description: "Lists apps launching at startup that may be slowing down boot time. Opens Task Manager for you to review — nothing is disabled automatically.",
         },
+        CheckInfo {
+            id: "steam_cache",
+            name: "Steam Download Cache",
+            description: "Checks the size of Steam's cached web and download data and clears it if large. Fixes many stalled downloads and store-page glitches. Steam rebuilds these automatically.",
+        },
+        CheckInfo {
+            id: "steam_reset",
+            name: "Steam Won't Open or Log In",
+            description: "Closes Steam and resets its local client registry — the most common fix for Steam failing to launch, freezing on login, or showing a blank window. You'll need to log back in afterward.",
+        },
+        CheckInfo {
+            id: "epic_cache",
+            name: "Epic Games Launcher Cache",
+            description: "Checks the size of the Epic Games Launcher's web cache and clears it if large. Fixes a blank/white launcher window, a missing game library, or stuck downloads.",
+        },
+        CheckInfo {
+            id: "epic_launcher_reset",
+            name: "Epic Games Launcher Frozen",
+            description: "Closes stuck Epic Games processes (launcher, web helper, overlay) and reopens the launcher. Fixes a frozen or unresponsive launcher.",
+        },
     ]
 }
 
@@ -387,6 +407,92 @@ fn scan_check(id: String) -> ScanResult {
                 }
             }
         }
+        "steam_cache" => {
+            let script = r#"
+                $steamPath = $null
+                try { $steamPath = (Get-ItemProperty "HKCU:\Software\Valve\Steam" -ErrorAction Stop).SteamPath } catch {}
+                if (-not $steamPath) {
+                    try { $steamPath = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Valve\Steam" -ErrorAction Stop).InstallPath } catch {}
+                }
+                if (-not $steamPath -or -not (Test-Path $steamPath)) {
+                    "NOTFOUND"
+                } else {
+                    $folders = "appcache\httpcache", "appcache\stats", "depotcache"
+                    $bytes = 0
+                    foreach ($f in $folders) {
+                        $p = Join-Path $steamPath $f
+                        if (Test-Path $p) {
+                            $sum = (Get-ChildItem -Path $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                            if ($sum) { $bytes += $sum }
+                        }
+                    }
+                    [math]::Round($bytes / 1MB, 1)
+                }
+            "#;
+            let (ok, out) = run_ps(script);
+            if !ok {
+                return ScanResult { status: "error".into(), detail: out };
+            }
+            let trimmed = out.trim();
+            if trimmed == "NOTFOUND" {
+                return ScanResult { status: "ok".into(), detail: "Steam isn't installed on this PC.".into() };
+            }
+            let mb: f64 = trimmed.parse().unwrap_or(0.0);
+            if mb > 200.0 {
+                ScanResult {
+                    status: "issue".into(),
+                    detail: format!("{:.1} MB of Steam cache found.", mb),
+                }
+            } else {
+                ScanResult {
+                    status: "ok".into(),
+                    detail: format!("Only {:.1} MB of Steam cache. Nothing to clean.", mb),
+                }
+            }
+        }
+        "steam_reset" => ScanResult {
+            status: "issue".into(),
+            detail: "Available as a manual fix if Steam won't launch, freezes while logging in, or shows a blank window.".into(),
+        },
+        "epic_cache" => {
+            let script = r#"
+                $paths = "$env:LOCALAPPDATA\EpicGamesLauncher\Saved\webcache", "$env:LOCALAPPDATA\EpicGamesLauncher\Saved\webcache_4147"
+                $found = $false
+                $bytes = 0
+                foreach ($p in $paths) {
+                    if (Test-Path $p) {
+                        $found = $true
+                        $sum = (Get-ChildItem -Path $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                        if ($sum) { $bytes += $sum }
+                    }
+                }
+                if (-not $found) { "NOTFOUND" } else { [math]::Round($bytes / 1MB, 1) }
+            "#;
+            let (ok, out) = run_ps(script);
+            if !ok {
+                return ScanResult { status: "error".into(), detail: out };
+            }
+            let trimmed = out.trim();
+            if trimmed == "NOTFOUND" {
+                return ScanResult { status: "ok".into(), detail: "Epic Games Launcher isn't installed on this PC.".into() };
+            }
+            let mb: f64 = trimmed.parse().unwrap_or(0.0);
+            if mb > 50.0 {
+                ScanResult {
+                    status: "issue".into(),
+                    detail: format!("{:.1} MB of Epic Games Launcher cache found.", mb),
+                }
+            } else {
+                ScanResult {
+                    status: "ok".into(),
+                    detail: format!("Only {:.1} MB of launcher cache. Nothing to clean.", mb),
+                }
+            }
+        }
+        "epic_launcher_reset" => ScanResult {
+            status: "issue".into(),
+            detail: "Available as a manual fix if the Epic Games Launcher is frozen, blank, or won't open.".into(),
+        },
         _ => ScanResult {
             status: "error".into(),
             detail: "Unknown check.".into(),
@@ -486,6 +592,91 @@ fn fix_check(id: String) -> FixResult {
         }
         "startup_programs" => {
             let (ok, out) = run_ps("Start-Process taskmgr; \"Task Manager opened. Go to the Startup tab to review and disable items.\"");
+            FixResult { success: ok, output: out }
+        }
+        "steam_cache" => {
+            let script = r#"
+                Stop-Process -Name "steam" -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 1
+                $steamPath = $null
+                try { $steamPath = (Get-ItemProperty "HKCU:\Software\Valve\Steam" -ErrorAction Stop).SteamPath } catch {}
+                if (-not $steamPath) {
+                    try { $steamPath = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Valve\Steam" -ErrorAction Stop).InstallPath } catch {}
+                }
+                if (-not $steamPath -or -not (Test-Path $steamPath)) {
+                    "Steam installation not found."
+                } else {
+                    $folders = "appcache\httpcache", "appcache\stats", "depotcache"
+                    foreach ($f in $folders) {
+                        $p = Join-Path $steamPath $f
+                        if (Test-Path $p) {
+                            Remove-Item -Path "$p\*" -Recurse -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                    "Steam cache cleared. Restart Steam to rebuild it."
+                }
+            "#;
+            let (ok, out) = run_ps(script);
+            FixResult { success: ok, output: out }
+        }
+        "steam_reset" => {
+            let script = r#"
+                try {
+                    Stop-Process -Name "steam" -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 1
+                    $steamPath = $null
+                    try { $steamPath = (Get-ItemProperty "HKCU:\Software\Valve\Steam" -ErrorAction Stop).SteamPath } catch {}
+                    if (-not $steamPath) {
+                        try { $steamPath = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Valve\Steam" -ErrorAction Stop).InstallPath } catch {}
+                    }
+                    if (-not $steamPath -or -not (Test-Path $steamPath)) {
+                        "Steam installation not found."
+                    } else {
+                        $blob = Join-Path $steamPath "ClientRegistry.blob"
+                        if (Test-Path $blob) { Remove-Item $blob -Force }
+                        "Steam's local registry was reset. Open Steam and log back in."
+                    }
+                } catch {
+                    "Could not reset Steam: $($_.Exception.Message)"
+                }
+            "#;
+            let (ok, out) = run_ps(script);
+            FixResult { success: ok, output: out }
+        }
+        "epic_cache" => {
+            let script = r#"
+                Stop-Process -Name "EpicGamesLauncher", "EpicWebHelper" -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 1
+                Remove-Item -Path "$env:LOCALAPPDATA\EpicGamesLauncher\Saved\webcache" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "$env:LOCALAPPDATA\EpicGamesLauncher\Saved\webcache_4147" -Recurse -Force -ErrorAction SilentlyContinue
+                "Epic Games Launcher cache cleared. Restart the launcher to rebuild it."
+            "#;
+            let (ok, out) = run_ps(script);
+            FixResult { success: ok, output: out }
+        }
+        "epic_launcher_reset" => {
+            let script = r#"
+                Stop-Process -Name "EpicGamesLauncher", "EpicWebHelper", "EpicOnlineServicesUIHelper", "EOSOverlayRenderer-Win64-Shipping", "UnrealCEFSubProcess" -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 1
+                $exePaths = @(
+                    "${env:ProgramFiles(x86)}\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe",
+                    "$env:ProgramFiles\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe"
+                )
+                $launched = $false
+                foreach ($p in $exePaths) {
+                    if (Test-Path $p) {
+                        Start-Process $p
+                        $launched = $true
+                        break
+                    }
+                }
+                if ($launched) {
+                    "Closed stuck Epic Games processes and reopened the launcher."
+                } else {
+                    "Closed stuck Epic Games processes. Couldn't find the launcher to reopen it automatically — open it manually."
+                }
+            "#;
+            let (ok, out) = run_ps(script);
             FixResult { success: ok, output: out }
         }
         _ => FixResult {

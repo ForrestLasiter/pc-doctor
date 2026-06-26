@@ -26,6 +26,10 @@ const ICONS = {
   windows_update_cache: "🧹",
   defender_scan: "🛡️",
   startup_programs: "🚀",
+  steam_cache: "🎮",
+  steam_reset: "🔁",
+  epic_cache: "🧩",
+  epic_launcher_reset: "♻️",
 };
 
 function renderChecks(checks) {

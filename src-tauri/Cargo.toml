@@ -1,6 +1,6 @@
 [package]
 name = "pc-doctor"
-version = "0.1.1"
+version = "0.2.0"
 description = "Scan and fix common Windows problems"
 authors = ["Forrest Lasiter"]
 edition = "2021"
