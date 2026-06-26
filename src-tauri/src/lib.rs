@@ -1,16 +1,36 @@
 use serde::Serialize;
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::Duration;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const LONG_TIMEOUT: Duration = Duration::from_secs(300);
 const REPAIR_TIMEOUT: Duration = Duration::from_secs(1800);
+
+fn active_pids() -> &'static Mutex<HashSet<u32>> {
+    static ACTIVE_PIDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
+    ACTIVE_PIDS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn kill_pid(pid: u32) {
+    let _ = Command::new("taskkill.exe")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+}
+
+fn kill_all_active_powershell() {
+    let pids: Vec<u32> = active_pids().lock().unwrap().drain().collect();
+    for pid in pids {
+        kill_pid(pid);
+    }
+}
 
 #[derive(Serialize, Clone)]
 struct CheckInfo {
@@ -140,13 +160,15 @@ fn run_ps_with_timeout(script: &str, timeout: Duration) -> (bool, String) {
     };
 
     let pid = child.id();
+    active_pids().lock().unwrap().insert(pid);
+
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let result = child.wait_with_output();
         let _ = tx.send(result);
     });
 
-    match rx.recv_timeout(timeout) {
+    let result = match rx.recv_timeout(timeout) {
         Ok(Ok(out)) => {
             let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -159,10 +181,7 @@ fn run_ps_with_timeout(script: &str, timeout: Duration) -> (bool, String) {
         }
         Ok(Err(e)) => (false, format!("Failed to run powershell: {}", e)),
         Err(_) => {
-            let _ = Command::new("taskkill.exe")
-                .args(["/F", "/T", "/PID", &pid.to_string()])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output();
+            kill_pid(pid);
             (
                 false,
                 format!(
@@ -171,7 +190,10 @@ fn run_ps_with_timeout(script: &str, timeout: Duration) -> (bool, String) {
                 ),
             )
         }
-    }
+    };
+
+    active_pids().lock().unwrap().remove(&pid);
+    result
 }
 
 fn history_path() -> Option<PathBuf> {
@@ -735,6 +757,11 @@ pub fn run() {
             log_event,
             get_history
         ])
+        .on_window_event(|_window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                kill_all_active_powershell();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
