@@ -17,8 +17,15 @@ PC Doctor runs a set of checks against your system and reports whether each one 
 - **Windows Update Cache** — clears a bloated or corrupt update download cache
 - **Antivirus Quick Scan** — checks Windows Defender status and runs a quick scan
 - **Startup Programs** — flags apps slowing down boot and opens Task Manager to review them (nothing is disabled automatically)
+- **Corrupted System Files** — flags Windows component-store corruption and repairs it with DISM + SFC
+- **Steam Download Cache** — clears bloated Steam cache that causes stalled downloads or store glitches
+- **Steam Won't Open or Log In** — resets Steam's local client registry, the standard fix for Steam failing to launch or freezing on login
+- **Epic Games Launcher Cache** — clears the launcher's web cache, fixing a blank window or missing library
+- **Epic Games Launcher Frozen** — force-closes stuck Epic processes and reopens the launcher
 
-Each check can be scanned individually or fixed with "Fix All." A run history is kept locally so you can see what's been done over time.
+Checks that detect Steam or Epic Games aren't installed report healthy automatically rather than showing a false issue.
+
+Each check can be scanned individually or fixed with "Fix All." Scans run several checks concurrently to finish faster. A run history is kept locally so you can see what's been done over time.
 
 ## Why
 
@@ -38,4 +45,4 @@ npm run tauri build  # produce a Windows installer
 
 ## Status
 
-Early (v0.1.0). Built and tested on Windows only.
+Early (v0.3.2). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
