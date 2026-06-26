@@ -493,10 +493,26 @@ fn scan_check_blocking(id: String) -> ScanResult {
                 }
             }
         }
-        "steam_reset" => ScanResult {
-            status: "issue".into(),
-            detail: "Available as a manual fix if Steam won't launch, freezes while logging in, or shows a blank window.".into(),
-        },
+        "steam_reset" => {
+            let script = r#"
+                $p = $null
+                try { $p = (Get-ItemProperty "HKCU:\Software\Valve\Steam" -ErrorAction Stop).SteamPath } catch {}
+                if (-not $p) { try { $p = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Valve\Steam" -ErrorAction Stop).InstallPath } catch {} }
+                if (-not $p -or -not (Test-Path $p)) { "NOTFOUND" } else { "FOUND" }
+            "#;
+            let (ok, out) = run_ps(script);
+            if !ok {
+                return ScanResult { status: "error".into(), detail: out };
+            }
+            if out.trim() == "NOTFOUND" {
+                ScanResult { status: "ok".into(), detail: "Steam isn't installed on this PC.".into() }
+            } else {
+                ScanResult {
+                    status: "issue".into(),
+                    detail: "Available as a manual fix if Steam won't launch, freezes while logging in, or shows a blank window.".into(),
+                }
+            }
+        }
         "epic_cache" => {
             let script = r#"
                 $paths = "$env:LOCALAPPDATA\EpicGamesLauncher\Saved\webcache", "$env:LOCALAPPDATA\EpicGamesLauncher\Saved\webcache_4147"
@@ -517,7 +533,7 @@ fn scan_check_blocking(id: String) -> ScanResult {
             }
             let trimmed = out.trim();
             if trimmed == "NOTFOUND" {
-                return ScanResult { status: "ok".into(), detail: "Epic Games Launcher isn't installed on this PC.".into() };
+                return ScanResult { status: "ok".into(), detail: "No Epic Games Launcher cache found. Nothing to clean.".into() };
             }
             let mb: f64 = trimmed.parse().unwrap_or(0.0);
             if mb > 50.0 {
@@ -532,10 +548,30 @@ fn scan_check_blocking(id: String) -> ScanResult {
                 }
             }
         }
-        "epic_launcher_reset" => ScanResult {
-            status: "issue".into(),
-            detail: "Available as a manual fix if the Epic Games Launcher is frozen, blank, or won't open.".into(),
-        },
+        "epic_launcher_reset" => {
+            let script = r#"
+                $paths = @(
+                    "${env:ProgramFiles(x86)}\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe",
+                    "$env:ProgramFiles\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe",
+                    "$env:LOCALAPPDATA\EpicGamesLauncher"
+                )
+                $found = $false
+                foreach ($p in $paths) { if (Test-Path $p) { $found = $true; break } }
+                if ($found) { "FOUND" } else { "NOTFOUND" }
+            "#;
+            let (ok, out) = run_ps(script);
+            if !ok {
+                return ScanResult { status: "error".into(), detail: out };
+            }
+            if out.trim() == "NOTFOUND" {
+                ScanResult { status: "ok".into(), detail: "Epic Games Launcher isn't installed on this PC.".into() }
+            } else {
+                ScanResult {
+                    status: "issue".into(),
+                    detail: "Available as a manual fix if the Epic Games Launcher is frozen, blank, or won't open.".into(),
+                }
+            }
+        }
         "system_file_check" => {
             let (ok, out) = run_ps_with_timeout("dism /Online /Cleanup-Image /CheckHealth", LONG_TIMEOUT);
             if !ok {
