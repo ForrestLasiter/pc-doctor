@@ -10,6 +10,7 @@ use std::time::Duration;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const LONG_TIMEOUT: Duration = Duration::from_secs(300);
+const REPAIR_TIMEOUT: Duration = Duration::from_secs(1800);
 
 #[derive(Serialize, Clone)]
 struct CheckInfo {
@@ -106,6 +107,11 @@ fn checks() -> Vec<CheckInfo> {
             id: "epic_launcher_reset",
             name: "Epic Games Launcher Frozen",
             description: "Closes stuck Epic Games processes (launcher, web helper, overlay) and reopens the launcher. Fixes a frozen or unresponsive launcher.",
+        },
+        CheckInfo {
+            id: "system_file_check",
+            name: "Corrupted System Files",
+            description: "Checks Windows' protected system files for corruption — a common cause of random crashes, missing DLL errors, and apps that won't start. The fix runs DISM and SFC repair, which can take 10-30 minutes and may need internet access.",
         },
     ]
 }
@@ -493,6 +499,29 @@ fn scan_check(id: String) -> ScanResult {
             status: "issue".into(),
             detail: "Available as a manual fix if the Epic Games Launcher is frozen, blank, or won't open.".into(),
         },
+        "system_file_check" => {
+            let (ok, out) = run_ps_with_timeout("dism /Online /Cleanup-Image /CheckHealth", LONG_TIMEOUT);
+            if !ok {
+                return ScanResult { status: "error".into(), detail: out };
+            }
+            let lower = out.to_lowercase();
+            if lower.contains("repairable") || lower.contains("corruption was detected") {
+                ScanResult {
+                    status: "issue".into(),
+                    detail: "Component store corruption detected. Repair is available.".into(),
+                }
+            } else if lower.contains("no component store corruption detected") {
+                ScanResult {
+                    status: "ok".into(),
+                    detail: "No system file corruption detected.".into(),
+                }
+            } else {
+                ScanResult {
+                    status: "ok".into(),
+                    detail: "Quick check didn't find a flagged issue.".into(),
+                }
+            }
+        }
         _ => ScanResult {
             status: "error".into(),
             detail: "Unknown check.".into(),
@@ -677,6 +706,15 @@ fn fix_check(id: String) -> FixResult {
                 }
             "#;
             let (ok, out) = run_ps(script);
+            FixResult { success: ok, output: out }
+        }
+        "system_file_check" => {
+            let script = r#"
+                $dismOut = dism /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
+                $sfcOut = sfc /scannow 2>&1 | Out-String
+                "DISM RestoreHealth:`n$dismOut`n`nSFC /scannow:`n$sfcOut"
+            "#;
+            let (ok, out) = run_ps_with_timeout(script, REPAIR_TIMEOUT);
             FixResult { success: ok, output: out }
         }
         _ => FixResult {

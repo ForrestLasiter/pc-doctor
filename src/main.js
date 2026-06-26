@@ -30,6 +30,7 @@ const ICONS = {
   steam_reset: "🔁",
   epic_cache: "🧩",
   epic_launcher_reset: "♻️",
+  system_file_check: "🩹",
 };
 
 function renderChecks(checks) {
