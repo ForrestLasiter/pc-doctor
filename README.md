@@ -22,6 +22,9 @@ PC Doctor runs a set of checks against your system and reports whether each one 
 - **Steam Won't Open or Log In** — resets Steam's local client registry, the standard fix for Steam failing to launch or freezing on login
 - **Epic Games Launcher Cache** — clears the launcher's web cache, fixing a blank window or missing library
 - **Epic Games Launcher Frozen** — force-closes stuck Epic processes and reopens the launcher
+- **Graphics Shader Cache** — clears DirectX and GPU-vendor shader caches, a common fix for stuttering, texture glitches, or flickering
+- **Graphics Driver Health** — flags driver errors (e.g. Code 43), a generic/missing display driver, or a very old driver, and opens the right place to get the correct one
+- **Restart Graphics Driver** — restarts the graphics driver to recover from a frozen/black screen or visual artifacts
 
 Checks that detect Steam or Epic Games aren't installed report healthy automatically rather than showing a false issue.
 
@@ -45,4 +48,4 @@ npm run tauri build  # produce a Windows installer
 
 ## Status
 
-Early (v0.3.2). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
+Early (v0.5.0). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.

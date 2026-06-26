@@ -13,6 +13,25 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const LONG_TIMEOUT: Duration = Duration::from_secs(300);
 const REPAIR_TIMEOUT: Duration = Duration::from_secs(2700);
 
+// Shared list of DirectX and GPU-vendor shader cache folders, summed to MB.
+const SHADER_CACHE_SIZE_SCRIPT: &str = r#"
+    $paths = @(
+        "$env:LOCALAPPDATA\D3DSCache",
+        "$env:LOCALAPPDATA\NVIDIA\DXCache",
+        "$env:LOCALAPPDATA\NVIDIA\GLCache",
+        "$env:LOCALAPPDATA\AMD\DxCache",
+        "$env:LOCALAPPDATA\AMD\DX9Cache"
+    )
+    $bytes = 0
+    foreach ($p in $paths) {
+        if (Test-Path $p) {
+            $s = (Get-ChildItem -Path $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+            if ($s) { $bytes += $s }
+        }
+    }
+    [math]::Round($bytes / 1MB, 1)
+"#;
+
 fn active_pids() -> &'static Mutex<HashSet<u32>> {
     static ACTIVE_PIDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
     ACTIVE_PIDS.get_or_init(|| Mutex::new(HashSet::new()))
@@ -132,6 +151,21 @@ fn checks() -> Vec<CheckInfo> {
             id: "system_file_check",
             name: "Corrupted System Files",
             description: "Checks Windows' protected system files for corruption — a common cause of random crashes, missing DLL errors, and apps that won't start. The fix runs DISM and SFC repair, which can take 10-30 minutes and may need internet access.",
+        },
+        CheckInfo {
+            id: "gpu_shader_cache",
+            name: "Graphics Shader Cache",
+            description: "Checks the size of the DirectX and graphics-card shader caches and clears them. A common fix for stuttering, texture glitches, or flickering, especially after a driver update. The cache rebuilds automatically.",
+        },
+        CheckInfo {
+            id: "gpu_driver_health",
+            name: "Graphics Driver Health",
+            description: "Checks your graphics card for driver errors (like Code 43), a missing or generic display driver, or a very old driver. The fix opens the right place to get the correct driver.",
+        },
+        CheckInfo {
+            id: "gpu_restart_driver",
+            name: "Restart Graphics Driver",
+            description: "Restarts the graphics driver to recover from a frozen screen, black screen, or visual artifacts. Your screen will go black for a second or two. Available as a manual fix.",
         },
     ]
 }
@@ -619,6 +653,69 @@ fn scan_check_blocking(id: String) -> ScanResult {
                 }
             }
         }
+        "gpu_shader_cache" => {
+            let script = SHADER_CACHE_SIZE_SCRIPT;
+            let (ok, out) = run_ps(script);
+            if !ok {
+                return ScanResult { status: "error".into(), detail: out };
+            }
+            let mb: f64 = out.trim().parse().unwrap_or(0.0);
+            if mb > 100.0 {
+                ScanResult {
+                    status: "issue".into(),
+                    detail: format!("{:.1} MB of shader cache. Clearing it can fix stuttering or visual glitches.", mb),
+                }
+            } else {
+                ScanResult {
+                    status: "ok".into(),
+                    detail: format!("Only {:.1} MB of shader cache. Nothing to clear.", mb),
+                }
+            }
+        }
+        "gpu_driver_health" => {
+            let script = r#"
+                $status = "ok"
+                $detail = "Graphics driver looks healthy."
+                $bad = Get-PnpDevice -Class Display -ErrorAction SilentlyContinue |
+                    Where-Object { $_.ConfigManagerErrorCode -ne $null -and $_.ConfigManagerErrorCode -ne 0 } |
+                    Select-Object -First 1
+                $basic = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match "Basic Display|Standard VGA" } | Select-Object -First 1
+                if ($bad) {
+                    $status = "issue"
+                    $detail = "Your graphics card reports a driver error (Code $($bad.ConfigManagerErrorCode)). Reinstalling the driver usually fixes it."
+                } elseif ($basic) {
+                    $status = "issue"
+                    $detail = "Windows is using a basic display driver - your graphics card's full driver isn't installed. Installing it fixes display problems and unlocks full performance."
+                } else {
+                    $vc = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+                        Where-Object { $_.DriverDate } | Sort-Object DriverDate | Select-Object -First 1
+                    if ($vc -and $vc.DriverDate) {
+                        $age = (Get-Date) - $vc.DriverDate
+                        if ($age.TotalDays -gt 730) {
+                            $status = "issue"
+                            $yrs = [math]::Round($age.TotalDays / 365, 1)
+                            $detail = "Your graphics driver is about $yrs years old ($($vc.Name)). A newer driver may fix glitches and improve performance."
+                        } else {
+                            $detail = "Graphics driver looks healthy ($($vc.Name))."
+                        }
+                    }
+                }
+                "$status|$detail"
+            "#;
+            let (ok, out) = run_ps(script);
+            if !ok {
+                return ScanResult { status: "error".into(), detail: out };
+            }
+            let trimmed = out.trim();
+            let (status, detail) = trimmed.split_once('|').unwrap_or(("ok", trimmed));
+            let status = if status.trim() == "issue" { "issue" } else { "ok" };
+            ScanResult { status: status.into(), detail: detail.trim().into() }
+        }
+        "gpu_restart_driver" => ScanResult {
+            status: "issue".into(),
+            detail: "Available as a manual fix if your screen freezes, goes black, or shows visual artifacts.".into(),
+        },
         _ => ScanResult {
             status: "error".into(),
             detail: "Unknown check.".into(),
@@ -922,6 +1019,78 @@ fn fix_check_blocking(id: String) -> FixResult {
             let (status_line, body) = out.split_once('\n').unwrap_or(("", out.as_str()));
             let success = status_line.trim() == "STATUS:ok";
             FixResult { success, output: body.trim().to_string() }
+        }
+        "gpu_shader_cache" => {
+            let script = r#"
+                $paths = @(
+                    "$env:LOCALAPPDATA\D3DSCache",
+                    "$env:LOCALAPPDATA\NVIDIA\DXCache",
+                    "$env:LOCALAPPDATA\NVIDIA\GLCache",
+                    "$env:LOCALAPPDATA\AMD\DxCache",
+                    "$env:LOCALAPPDATA\AMD\DX9Cache"
+                )
+                $freed = 0
+                foreach ($p in $paths) {
+                    if (Test-Path $p) {
+                        $s = (Get-ChildItem -Path $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                        if ($s) { $freed += $s }
+                        Remove-Item -Path "$p\*" -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                $mb = [math]::Round($freed / 1MB, 1)
+                "Cleared $mb MB of shader cache. It rebuilds automatically as you use apps and games."
+            "#;
+            let (ok, out) = run_ps(script);
+            FixResult { success: ok, output: out }
+        }
+        "gpu_driver_health" => {
+            // Detect-and-guide: open the right vendor's driver download page
+            // (or Windows Update if the vendor is unknown).
+            let script = r#"
+                $gpu = (Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name } | Select-Object -First 1).Name
+                if ($gpu -match "NVIDIA") {
+                    $url = "https://www.nvidia.com/Download/index.aspx"; $v = "NVIDIA"
+                } elseif ($gpu -match "AMD|Radeon") {
+                    $url = "https://www.amd.com/en/support"; $v = "AMD"
+                } elseif ($gpu -match "Intel") {
+                    $url = "https://www.intel.com/content/www/us/en/download-center/home.html"; $v = "Intel"
+                } else {
+                    $url = "ms-settings:windowsupdate"; $v = ""
+                }
+                Start-Process $url
+                if ($v -ne "") {
+                    "Opened the $v driver download page in your browser. Download and run the latest driver for your card ($gpu), then restart your PC."
+                } else {
+                    "Opened Windows Update. Click 'Check for updates' - it can install the right graphics driver for you."
+                }
+            "#;
+            let (ok, out) = run_ps(script);
+            FixResult { success: ok, output: out }
+        }
+        "gpu_restart_driver" => {
+            // Cycle the active display adapter. Always attempt to re-enable, even
+            // on error, so the user is never left without a display.
+            let script = r#"
+                try {
+                    $dev = Get-PnpDevice -Class Display -Status OK -ErrorAction Stop | Select-Object -First 1
+                    if (-not $dev) {
+                        "Couldn't find an active display adapter to restart."
+                    } else {
+                        Disable-PnpDevice -InstanceId $dev.InstanceId -Confirm:$false -ErrorAction Stop
+                        Start-Sleep -Seconds 2
+                        Enable-PnpDevice -InstanceId $dev.InstanceId -Confirm:$false -ErrorAction Stop
+                        "Graphics driver restarted ($($dev.FriendlyName)). If the screen looked frozen, it should respond now."
+                    }
+                } catch {
+                    # Make sure the adapter is back on no matter what went wrong.
+                    Get-PnpDevice -Class Display -ErrorAction SilentlyContinue |
+                        ForEach-Object { Enable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false -ErrorAction SilentlyContinue }
+                    "Couldn't fully restart the graphics driver: $($_.Exception.Message). If your screen is acting up, restart your PC."
+                }
+            "#;
+            let (ok, out) = run_ps_with_timeout(script, LONG_TIMEOUT);
+            FixResult { success: ok, output: out }
         }
         _ => FixResult {
             success: false,

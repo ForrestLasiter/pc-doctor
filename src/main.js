@@ -31,6 +31,9 @@ const ICONS = {
   epic_cache: "🧩",
   epic_launcher_reset: "♻️",
   system_file_check: "🩹",
+  gpu_shader_cache: "🎨",
+  gpu_driver_health: "🖥️",
+  gpu_restart_driver: "🔄",
 };
 
 function renderChecks(checks) {
