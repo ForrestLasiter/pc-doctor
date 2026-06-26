@@ -11,7 +11,7 @@ use std::time::Duration;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const LONG_TIMEOUT: Duration = Duration::from_secs(300);
-const REPAIR_TIMEOUT: Duration = Duration::from_secs(1800);
+const REPAIR_TIMEOUT: Duration = Duration::from_secs(2700);
 
 fn active_pids() -> &'static Mutex<HashSet<u32>> {
     static ACTIVE_PIDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
@@ -791,13 +791,86 @@ fn fix_check_blocking(id: String) -> FixResult {
             FixResult { success: ok, output: out }
         }
         "system_file_check" => {
+            // Repairs the component store with DISM (which SFC repairs *from*),
+            // then runs SFC. DISM's repair source is Windows Update, so we make
+            // sure it's reachable: start the WU service and, if a WSUS policy is
+            // redirecting updates (a common cause of error 0x800f0915), bypass it
+            // for the duration of the repair and restore it afterward. Returns a
+            // short verdict prefixed with a machine-readable STATUS line.
             let script = r#"
-                $dismOut = dism /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
-                $sfcOut = sfc /scannow 2>&1 | Out-String
-                "DISM RestoreHealth:`n$dismOut`n`nSFC /scannow:`n$sfcOut"
+                $ProgressPreference = 'SilentlyContinue'
+                $lines = New-Object System.Collections.ArrayList
+
+                # DISM's repair source is Windows Update - make sure the service is up.
+                try { Start-Service wuauserv -ErrorAction SilentlyContinue } catch {}
+
+                # Temporarily bypass WSUS redirection so DISM can reach Windows Update.
+                $auPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
+                $useWU = $null
+                try { $useWU = (Get-ItemProperty -Path $auPath -Name UseWUServer -ErrorAction Stop).UseWUServer } catch {}
+                if ($useWU -eq 1) {
+                    Set-ItemProperty -Path $auPath -Name UseWUServer -Value 0 -ErrorAction SilentlyContinue
+                    Restart-Service wuauserv -Force -ErrorAction SilentlyContinue
+                }
+
+                # Repair the component store. Output is captured only to inspect it,
+                # never shown, so the progress bars don't flood the result.
+                $dismRaw = & dism.exe /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
+                $dismCode = $LASTEXITCODE
+                $dismOk = ($dismCode -eq 0)
+
+                # Restore the WSUS setting we changed.
+                if ($useWU -eq 1) {
+                    Set-ItemProperty -Path $auPath -Name UseWUServer -Value 1 -ErrorAction SilentlyContinue
+                    Restart-Service wuauserv -Force -ErrorAction SilentlyContinue
+                }
+
+                if ($dismOk) {
+                    [void]$lines.Add("DISM: Windows component store is healthy.")
+                } elseif ($dismRaw -match "0x800f0915" -or $dismRaw -match "could not be found") {
+                    [void]$lines.Add("DISM: couldn't download repair files (error 0x800f0915).")
+                    [void]$lines.Add("Connect to the internet and turn off any VPN or work/metered network, then run this again. If it keeps failing, the repair may need a Windows installation ISO as a source.")
+                } else {
+                    [void]$lines.Add("DISM: repair didn't complete. Check your internet connection and try again.")
+                }
+
+                function Get-SfcResult {
+                    $raw = & sfc.exe /scannow | Out-String
+                    # SFC prints with embedded spacer characters; strip non-ASCII.
+                    $clean = ($raw -replace "[^\x20-\x7E\r\n]", "")
+                    if ($clean -match "did not find any integrity violations") { return "clean" }
+                    if ($clean -match "successfully repaired")                 { return "repaired" }
+                    if ($clean -match "unable to fix")                         { return "partial" }
+                    if ($clean -match "could not perform")                     { return "error" }
+                    return "unknown"
+                }
+
+                # SFC repairs from the store DISM just fixed. If the store was healthy
+                # but a first pass couldn't fix everything, a second pass often clears it.
+                $res = Get-SfcResult
+                if ($res -eq "partial" -and $dismOk) { $res = Get-SfcResult }
+
+                switch ($res) {
+                    "clean"    { [void]$lines.Add("SFC: no integrity violations - your system files are intact.") }
+                    "repaired" { [void]$lines.Add("SFC: found and repaired corrupted system files. Restart your PC to finish.") }
+                    "partial"  { [void]$lines.Add("SFC: fixed what it could, but some files remain. Restart and run this again; if it persists, run it once in Safe Mode.") }
+                    "error"    { [void]$lines.Add("SFC: couldn't run (another repair may be pending). Restart your PC and try again.") }
+                    default    { [void]$lines.Add("SFC: finished. Details are in C:\Windows\Logs\CBS\CBS.log.") }
+                }
+
+                if ($dismOk -and ($res -eq "clean" -or $res -eq "repaired")) { $status = "ok" }
+                elseif (-not $dismOk -and ($res -eq "partial" -or $res -eq "error")) { $status = "fail" }
+                else { $status = "warn" }
+
+                "STATUS:$status`n" + ($lines -join "`n")
             "#;
             let (ok, out) = run_ps_with_timeout(script, REPAIR_TIMEOUT);
-            FixResult { success: ok, output: out }
+            if !ok {
+                return FixResult { success: false, output: out };
+            }
+            let (status_line, body) = out.split_once('\n').unwrap_or(("", out.as_str()));
+            let success = status_line.trim() == "STATUS:ok";
+            FixResult { success, output: body.trim().to_string() }
         }
         _ => FixResult {
             success: false,
