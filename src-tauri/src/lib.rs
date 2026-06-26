@@ -376,26 +376,50 @@ fn scan_check_blocking(id: String) -> ScanResult {
             detail: "No restore point created yet this session. Recommended before running other fixes.".into(),
         },
         "windows_update_cache" => {
+            // Two separate sources of "Windows Update stuff": the download cache
+            // (SoftwareDistribution\Download) and superseded updates kept in the
+            // component store (what Disk Cleanup calls "Windows Update Cleanup").
+            // Measure the first directly; ask DISM whether the second is worth
+            // cleaning (best-effort, English output).
             let script = r#"
                 $path = "$env:windir\SoftwareDistribution\Download"
                 $bytes = (Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
                 if (-not $bytes) { $bytes = 0 }
-                [math]::Round($bytes / 1MB, 1)
+                $mb = [math]::Round($bytes / 1MB, 1)
+                $recommended = "no"
+                try {
+                    $a = & dism.exe /Online /Cleanup-Image /AnalyzeComponentStore 2>&1 | Out-String
+                    if ($a -match "Component Store Cleanup Recommended\s*:\s*Yes") { $recommended = "yes" }
+                } catch {}
+                "$mb|$recommended"
             "#;
-            let (ok, out) = run_ps(script);
+            let (ok, out) = run_ps_with_timeout(script, LONG_TIMEOUT);
             if !ok {
                 return ScanResult { status: "error".into(), detail: out };
             }
-            let mb: f64 = out.trim().parse().unwrap_or(0.0);
-            if mb > 500.0 {
+            let trimmed = out.trim();
+            let (mb_str, rec) = trimmed.split_once('|').unwrap_or((trimmed, "no"));
+            let mb: f64 = mb_str.trim().parse().unwrap_or(0.0);
+            let store_cleanup = rec.trim().eq_ignore_ascii_case("yes");
+            if mb > 500.0 && store_cleanup {
+                ScanResult {
+                    status: "issue".into(),
+                    detail: format!("{:.1} MB in the download cache, plus reclaimable space in the component store.", mb),
+                }
+            } else if mb > 500.0 {
                 ScanResult {
                     status: "issue".into(),
                     detail: format!("{:.1} MB of old Windows Update files found.", mb),
                 }
+            } else if store_cleanup {
+                ScanResult {
+                    status: "issue".into(),
+                    detail: "Superseded Windows Update files can be reclaimed from the component store.".into(),
+                }
             } else {
                 ScanResult {
                     status: "ok".into(),
-                    detail: format!("Only {:.1} MB in the Windows Update cache.", mb),
+                    detail: format!("Only {:.1} MB in the download cache and nothing reclaimable in the component store.", mb),
                 }
             }
         }
@@ -678,15 +702,42 @@ fn fix_check_blocking(id: String) -> FixResult {
             FixResult { success: ok, output: out }
         }
         "windows_update_cache" => {
+            // Clearing the download cache reliably means stopping *all* the
+            // services that hold those files open (not just wuauserv + bits, or
+            // the locked files silently survive): the Update Orchestrator and
+            // Delivery Optimization keep handles too. Then reclaim superseded
+            // updates from the component store, which is the larger, separate
+            // "Windows Update Cleanup" bucket that a folder delete can't touch.
             let script = r#"
-                Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
-                Stop-Service -Name bits -Force -ErrorAction SilentlyContinue
-                Remove-Item -Path "$env:windir\SoftwareDistribution\Download\*" -Recurse -Force -ErrorAction SilentlyContinue
-                Start-Service -Name bits -ErrorAction SilentlyContinue
-                Start-Service -Name wuauserv -ErrorAction SilentlyContinue
-                "Windows Update cache cleared."
+                $ProgressPreference = 'SilentlyContinue'
+                $dl = "$env:windir\SoftwareDistribution\Download"
+                $before = (Get-ChildItem -Path $dl -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                if (-not $before) { $before = 0 }
+
+                $services = @("wuauserv","bits","usosvc","dosvc")
+                foreach ($s in $services) { Stop-Service -Name $s -Force -ErrorAction SilentlyContinue }
+
+                Remove-Item -Path "$dl\*" -Recurse -Force -ErrorAction SilentlyContinue
+
+                foreach ($s in $services) { Start-Service -Name $s -ErrorAction SilentlyContinue }
+
+                $after = (Get-ChildItem -Path $dl -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                if (-not $after) { $after = 0 }
+                $freedMB = [math]::Round(($before - $after) / 1MB, 1)
+                if ($freedMB -lt 0) { $freedMB = 0 }
+
+                # Reclaim superseded updates from the component store (the
+                # "Windows Update Cleanup" item in Disk Cleanup).
+                & dism.exe /Online /Cleanup-Image /StartComponentCleanup 2>&1 | Out-Null
+                $storeOk = ($LASTEXITCODE -eq 0)
+
+                if ($storeOk) {
+                    "Cleared $freedMB MB from the download cache and reclaimed superseded updates from the component store."
+                } else {
+                    "Cleared $freedMB MB from the download cache. Component store cleanup didn't finish - it can be retried after a restart."
+                }
             "#;
-            let (ok, out) = run_ps(script);
+            let (ok, out) = run_ps_with_timeout(script, REPAIR_TIMEOUT);
             FixResult { success: ok, output: out }
         }
         "defender_scan" => {
