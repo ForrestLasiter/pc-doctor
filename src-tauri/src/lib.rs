@@ -208,8 +208,7 @@ fn list_checks() -> Vec<CheckInfo> {
     checks()
 }
 
-#[tauri::command]
-fn log_event(text: String) -> bool {
+fn log_event_blocking(text: String) -> bool {
     let Some(path) = history_path() else {
         return false;
     };
@@ -222,6 +221,13 @@ fn log_event(text: String) -> bool {
 }
 
 #[tauri::command]
+async fn log_event(text: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || log_event_blocking(text))
+        .await
+        .unwrap_or(false)
+}
+
+#[tauri::command]
 fn get_history() -> String {
     match history_path() {
         Some(path) => fs::read_to_string(&path).unwrap_or_default(),
@@ -230,7 +236,16 @@ fn get_history() -> String {
 }
 
 #[tauri::command]
-fn scan_check(id: String) -> ScanResult {
+async fn scan_check(id: String) -> ScanResult {
+    tauri::async_runtime::spawn_blocking(move || scan_check_blocking(id))
+        .await
+        .unwrap_or(ScanResult {
+            status: "error".into(),
+            detail: "Internal error running the check.".into(),
+        })
+}
+
+fn scan_check_blocking(id: String) -> ScanResult {
     match id.as_str() {
         "temp_files" => {
             let script = r#"
@@ -552,7 +567,16 @@ fn scan_check(id: String) -> ScanResult {
 }
 
 #[tauri::command]
-fn fix_check(id: String) -> FixResult {
+async fn fix_check(id: String) -> FixResult {
+    tauri::async_runtime::spawn_blocking(move || fix_check_blocking(id))
+        .await
+        .unwrap_or(FixResult {
+            success: false,
+            output: "Internal error running the fix.".into(),
+        })
+}
+
+fn fix_check_blocking(id: String) -> FixResult {
     match id.as_str() {
         "temp_files" => {
             let script = r#"
