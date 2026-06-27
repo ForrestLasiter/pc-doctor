@@ -25,8 +25,12 @@ PC Doctor runs a set of checks against your system and reports whether each one 
 - **Graphics Shader Cache** — clears DirectX and GPU-vendor shader caches, a common fix for stuttering, texture glitches, or flickering
 - **Graphics Driver Health** — flags driver errors (e.g. Code 43), a generic/missing display driver, or a very old driver, and opens the right place to get the correct one
 - **Restart Graphics Driver** — restarts the graphics driver to recover from a frozen/black screen or visual artifacts
+- **Disk Health (SMART)** — reads each drive's health status and warns you if a drive may be failing, so you can back up in time
+- **Hardware Device Problems** — flags connected components and built-in hardware that Windows can't use (usually a missing driver) and helps get them working
+- **Battery Health** — on laptops, reports how much battery capacity has been lost to wear; skipped on desktops
+- **Memory (RAM)** — reports installed memory and recent hardware errors, and can launch Windows Memory Diagnostic to test for faulty RAM
 
-Checks that detect Steam or Epic Games aren't installed report healthy automatically rather than showing a false issue.
+Checks that detect Steam or Epic Games aren't installed report healthy automatically rather than showing a false issue. Hardware checks that can't be fixed in software (a failing drive, worn battery) instead point you to the right next step.
 
 Each check can be scanned individually or fixed with "Fix All." Scans run several checks concurrently to finish faster. A run history is kept locally so you can see what's been done over time.
 
@@ -47,7 +51,7 @@ You only have to do this once per download. PC Doctor needs administrator rights
 Each release includes a `SHA256SUMS.txt` file. To confirm your installer wasn't tampered with, open PowerShell where you downloaded it and run:
 
 ```powershell
-Get-FileHash ".\PC Doctor_0.5.0_x64-setup.exe" -Algorithm SHA256
+Get-FileHash ".\PC Doctor_0.6.0_x64-setup.exe" -Algorithm SHA256
 ```
 
 The hash it prints should match the one in `SHA256SUMS.txt` for that file.
@@ -70,4 +74,4 @@ npm run tauri build  # produce a Windows installer
 
 ## Status
 
-Early (v0.5.0). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
+Early (v0.6.0). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.

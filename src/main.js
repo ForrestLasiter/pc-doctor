@@ -34,6 +34,10 @@ const ICONS = {
   gpu_shader_cache: "🎨",
   gpu_driver_health: "🖥️",
   gpu_restart_driver: "🔄",
+  disk_health: "💽",
+  device_problems: "🧰",
+  battery_health: "🔋",
+  memory_check: "🧠",
 };
 
 function renderChecks(checks) {

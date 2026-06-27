@@ -167,6 +167,26 @@ fn checks() -> Vec<CheckInfo> {
             name: "Restart Graphics Driver",
             description: "Restarts the graphics driver to recover from a frozen screen, black screen, or visual artifacts. Your screen will go black for a second or two. Available as a manual fix.",
         },
+        CheckInfo {
+            id: "disk_health",
+            name: "Disk Health (SMART)",
+            description: "Reads each drive's built-in health status and warns you if a drive may be failing, so you can back up your files before you lose them.",
+        },
+        CheckInfo {
+            id: "device_problems",
+            name: "Hardware Device Problems",
+            description: "Scans all connected components and built-in hardware for devices Windows can't use — usually a missing or broken driver — and helps you get them working.",
+        },
+        CheckInfo {
+            id: "battery_health",
+            name: "Battery Health",
+            description: "On laptops, checks how much of the battery's original capacity has been lost to wear. Skipped automatically on desktops.",
+        },
+        CheckInfo {
+            id: "memory_check",
+            name: "Memory (RAM)",
+            description: "Reports your installed memory and checks Windows' logs for recent hardware errors. Can launch the built-in Windows Memory Diagnostic to test for faulty RAM.",
+        },
     ]
 }
 
@@ -228,6 +248,19 @@ fn run_ps_with_timeout(script: &str, timeout: Duration) -> (bool, String) {
 
     active_pids().lock().unwrap().remove(&pid);
     result
+}
+
+/// Runs a scan script that prints a single `status|detail` line (status is
+/// "issue" or "ok") and turns it into a ScanResult.
+fn status_detail_scan(script: &str, timeout: Duration) -> ScanResult {
+    let (ok, out) = run_ps_with_timeout(script, timeout);
+    if !ok {
+        return ScanResult { status: "error".into(), detail: out };
+    }
+    let trimmed = out.trim();
+    let (status, detail) = trimmed.split_once('|').unwrap_or(("ok", trimmed));
+    let status = if status.trim().eq_ignore_ascii_case("issue") { "issue" } else { "ok" };
+    ScanResult { status: status.into(), detail: detail.trim().into() }
 }
 
 fn history_path() -> Option<PathBuf> {
@@ -703,19 +736,93 @@ fn scan_check_blocking(id: String) -> ScanResult {
                 }
                 "$status|$detail"
             "#;
-            let (ok, out) = run_ps(script);
-            if !ok {
-                return ScanResult { status: "error".into(), detail: out };
-            }
-            let trimmed = out.trim();
-            let (status, detail) = trimmed.split_once('|').unwrap_or(("ok", trimmed));
-            let status = if status.trim() == "issue" { "issue" } else { "ok" };
-            ScanResult { status: status.into(), detail: detail.trim().into() }
+            status_detail_scan(script, DEFAULT_TIMEOUT)
         }
         "gpu_restart_driver" => ScanResult {
             status: "issue".into(),
             detail: "Available as a manual fix if your screen freezes, goes black, or shows visual artifacts.".into(),
         },
+        "disk_health" => {
+            let script = r#"
+                $disks = Get-PhysicalDisk -ErrorAction SilentlyContinue
+                if (-not $disks) { "ok|Couldn't read drive health on this system." }
+                else {
+                    $bad = $disks | Where-Object { $_.HealthStatus -and $_.HealthStatus -ne "Healthy" }
+                    $total = ($disks | Measure-Object).Count
+                    if ($bad) {
+                        $names = ($bad | ForEach-Object { "$($_.FriendlyName) [$($_.HealthStatus)]" }) -join "; "
+                        "issue|Warning: $names. Back up important files now and consider replacing the drive."
+                    } else {
+                        "ok|All $total drive(s) report healthy."
+                    }
+                }
+            "#;
+            status_detail_scan(script, DEFAULT_TIMEOUT)
+        }
+        "device_problems" => {
+            let script = r#"
+                $bad = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
+                    Where-Object { $_.ConfigManagerErrorCode -ne $null -and $_.ConfigManagerErrorCode -ne 0 }
+                $count = ($bad | Measure-Object).Count
+                if ($count -gt 0) {
+                    $names = ($bad | Select-Object -First 4 | ForEach-Object {
+                        if ($_.FriendlyName) { $_.FriendlyName }
+                        elseif ($_.Class) { "$($_.Class) device" }
+                        else { "Unknown device" }
+                    }) -join ", "
+                    $more = if ($count -gt 4) { " (+$($count - 4) more)" } else { "" }
+                    "issue|$count device(s) aren't working, usually a missing driver: $names$more."
+                } else {
+                    "ok|All connected devices are working."
+                }
+            "#;
+            status_detail_scan(script, DEFAULT_TIMEOUT)
+        }
+        "battery_health" => {
+            let script = r#"
+                $b = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue
+                if (-not $b) { "ok|No battery detected (this looks like a desktop)." }
+                else {
+                    $static = Get-CimInstance -Namespace root\wmi -Class BatteryStaticData -ErrorAction SilentlyContinue | Select-Object -First 1
+                    $full = Get-CimInstance -Namespace root\wmi -Class BatteryFullChargedCapacity -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($static -and $full -and $static.DesignedCapacity -gt 0) {
+                        $wear = [math]::Round((1 - ($full.FullChargedCapacity / $static.DesignedCapacity)) * 100, 0)
+                        if ($wear -lt 0) { $wear = 0 }
+                        if ($wear -ge 30) {
+                            "issue|Your battery has lost about $wear% of its original capacity. It may not hold a charge well - consider replacing it."
+                        } else {
+                            "ok|Battery health is good (about $wear% capacity lost to wear)."
+                        }
+                    } else {
+                        "ok|Battery detected. Detailed wear data isn't available from this laptop."
+                    }
+                }
+            "#;
+            status_detail_scan(script, DEFAULT_TIMEOUT)
+        }
+        "memory_check" => {
+            let script = r#"
+                $cs = Get-CimInstance Win32_ComputerSystem
+                $totalGB = [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
+                $mods = Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue
+                $slotsUsed = ($mods | Measure-Object).Count
+                $arr = Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction SilentlyContinue | Select-Object -First 1
+                $slotsTotal = if ($arr) { $arr.MemoryDevices } else { $slotsUsed }
+                $speed = ($mods | Select-Object -First 1).Speed
+                $summary = "$totalGB GB RAM, $slotsUsed of $slotsTotal slots used at $speed MHz."
+                $whea = $null
+                try {
+                    $whea = Get-WinEvent -FilterHashtable @{LogName="System"; ProviderName="Microsoft-Windows-WHEA-Logger"; Level=1,2; StartTime=(Get-Date).AddDays(-14)} -MaxEvents 20 -ErrorAction Stop
+                } catch {}
+                $wheaCount = ($whea | Measure-Object).Count
+                if ($wheaCount -gt 0) {
+                    "issue|$summary Windows logged $wheaCount hardware error(s) in the last 2 weeks - worth running a memory test."
+                } else {
+                    "ok|$summary No recent hardware errors logged."
+                }
+            "#;
+            status_detail_scan(script, DEFAULT_TIMEOUT)
+        }
         _ => ScanResult {
             status: "error".into(),
             detail: "Unknown check.".into(),
@@ -1090,6 +1197,51 @@ fn fix_check_blocking(id: String) -> FixResult {
                 }
             "#;
             let (ok, out) = run_ps_with_timeout(script, LONG_TIMEOUT);
+            FixResult { success: ok, output: out }
+        }
+        "disk_health" => {
+            // No software fix for a failing drive - guide the user to back up.
+            let script = r#"
+                Start-Process "ms-settings:backup"
+                "Opened Windows Backup settings. Back up your important files now. A SMART warning often appears before a drive fails - if it keeps reporting problems, replace the drive."
+            "#;
+            let (ok, out) = run_ps(script);
+            FixResult { success: ok, output: out }
+        }
+        "device_problems" => {
+            // Rescan for hardware (can install matching drivers from the driver
+            // store) and open Device Manager so the user can act on the rest.
+            let script = r#"
+                & pnputil.exe /scan-devices 2>&1 | Out-Null
+                Start-Process "devmgmt.msc"
+                "Rescanned for hardware and opened Device Manager. Look for items marked with a yellow '!', right-click one, and choose 'Update driver'. Missing drivers usually come from Windows Update or your PC/motherboard maker's support page."
+            "#;
+            let (ok, out) = run_ps_with_timeout(script, LONG_TIMEOUT);
+            FixResult { success: ok, output: out }
+        }
+        "battery_health" => {
+            // Generate Windows' detailed battery report and open it.
+            let script = r#"
+                $out = "$env:USERPROFILE\battery-report.html"
+                & powercfg.exe /batteryreport /output "$out" 2>&1 | Out-Null
+                if (Test-Path $out) {
+                    Start-Process $out
+                    "Generated a detailed battery report and opened it ($out). The 'Battery capacity history' section shows how its capacity has dropped over time."
+                } else {
+                    "Couldn't generate a battery report on this device."
+                }
+            "#;
+            let (ok, out) = run_ps(script);
+            FixResult { success: ok, output: out }
+        }
+        "memory_check" => {
+            // Launch Windows Memory Diagnostic (it offers restart-now or
+            // on-next-reboot, so the user stays in control of the reboot).
+            let script = r#"
+                Start-Process "mdsched.exe"
+                "Opened Windows Memory Diagnostic. Choose 'Restart now and check for problems' to test your RAM - your PC will reboot and run the scan. Save your work first."
+            "#;
+            let (ok, out) = run_ps(script);
             FixResult { success: ok, output: out }
         }
         _ => FixResult {
