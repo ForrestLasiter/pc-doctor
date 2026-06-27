@@ -340,7 +340,8 @@ fn scan_check_blocking(id: String) -> ScanResult {
         "disk_space" => {
             let script = r#"
                 $d = Get-PSDrive C
-                $freePct = [math]::Round(($d.Free / ($d.Free + $d.Used)) * 100, 1)
+                $cap = $d.Free + $d.Used
+                $freePct = if ($cap -gt 0) { [math]::Round(($d.Free / $cap) * 100, 1) } else { 100 }
                 $freeGB = [math]::Round($d.Free / 1GB, 1)
                 "$freePct,$freeGB"
             "#;
@@ -368,16 +369,18 @@ fn scan_check_blocking(id: String) -> ScanResult {
             detail: "DNS cache can be flushed at any time to resolve connectivity issues.".into(),
         },
         "windows_updates" => {
+            // The scan must stay light: don't install the PSWindowsUpdate module
+            // here (that's a slow, network-bound, system-wide change). If it's not
+            // already present, defer to the fix; otherwise do a quick count.
             let script = r#"
                 try {
                     if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
-                        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
-                        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-                        Install-Module -Name PSWindowsUpdate -Force -Confirm:$false -Scope AllUsers -ErrorAction Stop
+                        "NOMODULE"
+                    } else {
+                        Import-Module PSWindowsUpdate -ErrorAction Stop
+                        $updates = Get-WindowsUpdate -ErrorAction Stop
+                        ($updates | Measure-Object).Count
                     }
-                    Import-Module PSWindowsUpdate -ErrorAction Stop
-                    $updates = Get-WindowsUpdate -ErrorAction Stop
-                    ($updates | Measure-Object).Count
                 } catch {
                     "ERROR: $($_.Exception.Message)"
                 }
@@ -386,6 +389,12 @@ fn scan_check_blocking(id: String) -> ScanResult {
             let trimmed = out.trim();
             if !ok || trimmed.starts_with("ERROR:") {
                 return ScanResult { status: "error".into(), detail: trimmed.to_string() };
+            }
+            if trimmed == "NOMODULE" {
+                return ScanResult {
+                    status: "issue".into(),
+                    detail: "Click Fix to check for and install Windows updates (a small update helper is installed the first time).".into(),
+                };
             }
             let count: i32 = trimmed.parse().unwrap_or(0);
             if count > 0 {
@@ -401,36 +410,48 @@ fn scan_check_blocking(id: String) -> ScanResult {
             }
         }
         "windows_update_service" => {
-            let (ok, out) = run_ps("(Get-Service -Name wuauserv).Status");
+            let (ok, out) = run_ps("$s = Get-Service -Name wuauserv -ErrorAction SilentlyContinue; if ($s) { $s.Status } else { 'NotFound' }");
             if !ok {
                 return ScanResult { status: "error".into(), detail: out };
             }
-            if out.trim().eq_ignore_ascii_case("Running") {
+            let status = out.trim();
+            if status.eq_ignore_ascii_case("Running") {
                 ScanResult {
                     status: "ok".into(),
                     detail: "Windows Update service is running.".into(),
                 }
+            } else if status.eq_ignore_ascii_case("NotFound") {
+                ScanResult {
+                    status: "issue".into(),
+                    detail: "Windows Update service isn't present. The fix will try to start it.".into(),
+                }
             } else {
                 ScanResult {
                     status: "issue".into(),
-                    detail: format!("Windows Update service status: {}", out.trim()),
+                    detail: format!("Windows Update service status: {}", status),
                 }
             }
         }
         "print_spooler" => {
-            let (ok, out) = run_ps("(Get-Service -Name Spooler).Status");
+            let (ok, out) = run_ps("$s = Get-Service -Name Spooler -ErrorAction SilentlyContinue; if ($s) { $s.Status } else { 'NotFound' }");
             if !ok {
                 return ScanResult { status: "error".into(), detail: out };
             }
-            if out.trim().eq_ignore_ascii_case("Running") {
+            let status = out.trim();
+            if status.eq_ignore_ascii_case("Running") {
                 ScanResult {
                     status: "ok".into(),
                     detail: "Print Spooler service is running.".into(),
                 }
+            } else if status.eq_ignore_ascii_case("NotFound") {
+                ScanResult {
+                    status: "issue".into(),
+                    detail: "Print Spooler service isn't present. The fix will try to start it.".into(),
+                }
             } else {
                 ScanResult {
                     status: "issue".into(),
-                    detail: format!("Print Spooler service status: {}", out.trim()),
+                    detail: format!("Print Spooler service status: {}", status),
                 }
             }
         }
@@ -443,50 +464,30 @@ fn scan_check_blocking(id: String) -> ScanResult {
             detail: "No restore point created yet this session. Recommended before running other fixes.".into(),
         },
         "windows_update_cache" => {
-            // Two separate sources of "Windows Update stuff": the download cache
-            // (SoftwareDistribution\Download) and superseded updates kept in the
-            // component store (what Disk Cleanup calls "Windows Update Cleanup").
-            // Measure the first directly; ask DISM whether the second is worth
-            // cleaning (best-effort, English output).
+            // Measure the download cache directly (fast). We intentionally do NOT
+            // run `dism AnalyzeComponentStore` here - it can take 30-60s and would
+            // slow every scan. The fix still reclaims the component store via
+            // StartComponentCleanup, so deeper cleanup happens when the user acts.
             let script = r#"
                 $path = "$env:windir\SoftwareDistribution\Download"
                 $bytes = (Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
                 if (-not $bytes) { $bytes = 0 }
-                $mb = [math]::Round($bytes / 1MB, 1)
-                $recommended = "no"
-                try {
-                    $a = & dism.exe /Online /Cleanup-Image /AnalyzeComponentStore 2>&1 | Out-String
-                    if ($a -match "Component Store Cleanup Recommended\s*:\s*Yes") { $recommended = "yes" }
-                } catch {}
-                "$mb|$recommended"
+                [math]::Round($bytes / 1MB, 1)
             "#;
-            let (ok, out) = run_ps_with_timeout(script, LONG_TIMEOUT);
+            let (ok, out) = run_ps(script);
             if !ok {
                 return ScanResult { status: "error".into(), detail: out };
             }
-            let trimmed = out.trim();
-            let (mb_str, rec) = trimmed.split_once('|').unwrap_or((trimmed, "no"));
-            let mb: f64 = mb_str.trim().parse().unwrap_or(0.0);
-            let store_cleanup = rec.trim().eq_ignore_ascii_case("yes");
-            if mb > 500.0 && store_cleanup {
+            let mb: f64 = out.trim().parse().unwrap_or(0.0);
+            if mb > 500.0 {
                 ScanResult {
                     status: "issue".into(),
-                    detail: format!("{:.1} MB in the download cache, plus reclaimable space in the component store.", mb),
-                }
-            } else if mb > 500.0 {
-                ScanResult {
-                    status: "issue".into(),
-                    detail: format!("{:.1} MB of old Windows Update files found.", mb),
-                }
-            } else if store_cleanup {
-                ScanResult {
-                    status: "issue".into(),
-                    detail: "Superseded Windows Update files can be reclaimed from the component store.".into(),
+                    detail: format!("{:.1} MB of old Windows Update files. Cleaning also reclaims superseded updates from the component store.", mb),
                 }
             } else {
                 ScanResult {
                     status: "ok".into(),
-                    detail: format!("Only {:.1} MB in the download cache and nothing reclaimable in the component store.", mb),
+                    detail: format!("Only {:.1} MB in the download cache.", mb),
                 }
             }
         }
@@ -709,11 +710,11 @@ fn scan_check_blocking(id: String) -> ScanResult {
             let script = r#"
                 $status = "ok"
                 $detail = "Graphics driver looks healthy."
+                $vcs = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue)
                 $bad = Get-PnpDevice -Class Display -ErrorAction SilentlyContinue |
                     Where-Object { $_.ConfigManagerErrorCode -ne $null -and $_.ConfigManagerErrorCode -ne 0 } |
                     Select-Object -First 1
-                $basic = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Name -match "Basic Display|Standard VGA" } | Select-Object -First 1
+                $basic = $vcs | Where-Object { $_.Name -match "Basic Display|Standard VGA" } | Select-Object -First 1
                 if ($bad) {
                     $status = "issue"
                     $detail = "Your graphics card reports a driver error (Code $($bad.ConfigManagerErrorCode)). Reinstalling the driver usually fixes it."
@@ -721,8 +722,7 @@ fn scan_check_blocking(id: String) -> ScanResult {
                     $status = "issue"
                     $detail = "Windows is using a basic display driver - your graphics card's full driver isn't installed. Installing it fixes display problems and unlocks full performance."
                 } else {
-                    $vc = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
-                        Where-Object { $_.DriverDate } | Sort-Object DriverDate | Select-Object -First 1
+                    $vc = $vcs | Where-Object { $_.DriverDate } | Sort-Object DriverDate | Select-Object -First 1
                     if ($vc -and $vc.DriverDate) {
                         $age = (Get-Date) - $vc.DriverDate
                         if ($age.TotalDays -gt 730) {
@@ -852,9 +852,21 @@ fn fix_check_blocking(id: String) -> FixResult {
             FixResult { success: ok, output: out }
         }
         "disk_space" => {
+            // `cleanmgr /sagerun:1` only cleans categories pre-selected with
+            // `/sageset:1`, which never runs - so it frees nothing. Instead empty
+            // the Recycle Bin and temp files directly (reliable), report how much
+            // was freed, and open Storage settings for deeper cleanup.
             let script = r#"
-                cleanmgr /sagerun:1 | Out-Null
-                "Disk cleanup launched."
+                $ProgressPreference = 'SilentlyContinue'
+                $before = (Get-PSDrive C).Free
+                Clear-RecycleBin -Force -Confirm:$false -ErrorAction SilentlyContinue
+                Get-ChildItem -Path $env:TEMP -Recurse -Force -ErrorAction SilentlyContinue |
+                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                $after = (Get-PSDrive C).Free
+                $freedMB = [math]::Round(($after - $before) / 1MB, 1)
+                if ($freedMB -lt 0) { $freedMB = 0 }
+                Start-Process "ms-settings:storagesense"
+                "Freed about $freedMB MB by emptying the Recycle Bin and temp files, and opened Storage settings where you can remove more (old downloads, Windows Update files, and more)."
             "#;
             let (ok, out) = run_ps(script);
             FixResult { success: ok, output: out }
@@ -881,11 +893,30 @@ fn fix_check_blocking(id: String) -> FixResult {
             FixResult { success: ok, output: out }
         }
         "windows_update_service" => {
-            let (ok, out) = run_ps("Restart-Service -Name wuauserv -Force; (Get-Service -Name wuauserv).Status");
+            // Set to Manual first so a disabled service can still be started.
+            let script = r#"
+                try {
+                    Set-Service -Name wuauserv -StartupType Manual -ErrorAction SilentlyContinue
+                    Restart-Service -Name wuauserv -Force -ErrorAction Stop
+                    "Windows Update service restarted. Status: " + (Get-Service -Name wuauserv).Status
+                } catch {
+                    "Could not restart the Windows Update service: $($_.Exception.Message)"
+                }
+            "#;
+            let (ok, out) = run_ps(script);
             FixResult { success: ok, output: out }
         }
         "print_spooler" => {
-            let (ok, out) = run_ps("Restart-Service -Name Spooler -Force; (Get-Service -Name Spooler).Status");
+            let script = r#"
+                try {
+                    Set-Service -Name Spooler -StartupType Automatic -ErrorAction SilentlyContinue
+                    Restart-Service -Name Spooler -Force -ErrorAction Stop
+                    "Print Spooler restarted. Status: " + (Get-Service -Name Spooler).Status
+                } catch {
+                    "Could not restart the Print Spooler: $($_.Exception.Message)"
+                }
+            "#;
+            let (ok, out) = run_ps(script);
             FixResult { success: ok, output: out }
         }
         "winsock_reset" => {
@@ -945,6 +976,8 @@ fn fix_check_blocking(id: String) -> FixResult {
             FixResult { success: ok, output: out }
         }
         "defender_scan" => {
+            // A quick scan commonly runs 1-5 minutes, so it needs the long
+            // timeout - the 60s default would kill it mid-scan.
             let script = r#"
                 try {
                     Start-MpScan -ScanType QuickScan -ErrorAction Stop
@@ -953,7 +986,7 @@ fn fix_check_blocking(id: String) -> FixResult {
                     "Could not run a scan: $($_.Exception.Message)"
                 }
             "#;
-            let (ok, out) = run_ps(script);
+            let (ok, out) = run_ps_with_timeout(script, LONG_TIMEOUT);
             FixResult { success: ok, output: out }
         }
         "startup_programs" => {
