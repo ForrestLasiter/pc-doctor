@@ -93,11 +93,6 @@ fn checks() -> Vec<CheckInfo> {
             description: "Flushes the DNS resolver cache, useful for connectivity issues.",
         },
         CheckInfo {
-            id: "windows_updates",
-            name: "Windows Updates",
-            description: "Checks for available Windows updates and installs them. If the PSWindowsUpdate module isn't already present, this installs it from the PowerShell Gallery and trusts that repository system-wide.",
-        },
-        CheckInfo {
             id: "windows_update_service",
             name: "Windows Update Service",
             description: "Checks if the Windows Update service is running and restarts it if not.",
@@ -368,47 +363,6 @@ fn scan_check_blocking(id: String) -> ScanResult {
             status: "issue".into(),
             detail: "DNS cache can be flushed at any time to resolve connectivity issues.".into(),
         },
-        "windows_updates" => {
-            // The scan must stay light: don't install the PSWindowsUpdate module
-            // here (that's a slow, network-bound, system-wide change). If it's not
-            // already present, defer to the fix; otherwise do a quick count.
-            let script = r#"
-                try {
-                    if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
-                        "NOMODULE"
-                    } else {
-                        Import-Module PSWindowsUpdate -ErrorAction Stop
-                        $updates = Get-WindowsUpdate -ErrorAction Stop
-                        ($updates | Measure-Object).Count
-                    }
-                } catch {
-                    "ERROR: $($_.Exception.Message)"
-                }
-            "#;
-            let (ok, out) = run_ps_with_timeout(script, LONG_TIMEOUT);
-            let trimmed = out.trim();
-            if !ok || trimmed.starts_with("ERROR:") {
-                return ScanResult { status: "error".into(), detail: trimmed.to_string() };
-            }
-            if trimmed == "NOMODULE" {
-                return ScanResult {
-                    status: "issue".into(),
-                    detail: "Click Fix to check for and install Windows updates (a small update helper is installed the first time).".into(),
-                };
-            }
-            let count: i32 = trimmed.parse().unwrap_or(0);
-            if count > 0 {
-                ScanResult {
-                    status: "issue".into(),
-                    detail: format!("{} update(s) available.", count),
-                }
-            } else {
-                ScanResult {
-                    status: "ok".into(),
-                    detail: "No updates available. Windows is up to date.".into(),
-                }
-            }
-        }
         "windows_update_service" => {
             let (ok, out) = run_ps("$s = Get-Service -Name wuauserv -ErrorAction SilentlyContinue; if ($s) { $s.Status } else { 'NotFound' }");
             if !ok {
@@ -840,6 +794,39 @@ async fn fix_check(id: String) -> FixResult {
         })
 }
 
+/// Nudges Windows Update to look for (and, per the OS's own settings, download
+/// and install) updates in the background. Returns immediately - it does NOT
+/// wait for updates to download or install; Windows does that on its own
+/// schedule. This replaces the old blocking "check for updates" check.
+#[tauri::command]
+async fn trigger_windows_update() -> FixResult {
+    tauri::async_runtime::spawn_blocking(|| {
+        let script = r#"
+            $ok = $false
+            try {
+                (New-Object -ComObject Microsoft.Update.AutoUpdate).DetectNow()
+                $ok = $true
+            } catch {}
+            # Belt-and-suspenders nudge to the Update Orchestrator (fire-and-forget).
+            try {
+                Start-Process -FilePath "$env:windir\System32\UsoClient.exe" -ArgumentList "StartScan" -WindowStyle Hidden -ErrorAction SilentlyContinue
+            } catch {}
+            if ($ok) {
+                "Windows Update is now looking for updates in the background. Windows will download and install them on its own schedule - you don't need to wait here."
+            } else {
+                "Asked Windows to look for updates in the background."
+            }
+        "#;
+        let (ok, out) = run_ps(script);
+        FixResult { success: ok, output: out }
+    })
+    .await
+    .unwrap_or(FixResult {
+        success: false,
+        output: "Internal error triggering Windows Update.".into(),
+    })
+}
+
 fn fix_check_blocking(id: String) -> FixResult {
     match id.as_str() {
         "temp_files" => {
@@ -873,23 +860,6 @@ fn fix_check_blocking(id: String) -> FixResult {
         }
         "dns_cache" => {
             let (ok, out) = run_ps("ipconfig /flushdns");
-            FixResult { success: ok, output: out }
-        }
-        "windows_updates" => {
-            let script = r#"
-                try {
-                    if (-not (Get-Module -ListAvailable -Name PSWindowsUpdate)) {
-                        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
-                        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-                        Install-Module -Name PSWindowsUpdate -Force -Confirm:$false -Scope AllUsers -ErrorAction Stop
-                    }
-                    Import-Module PSWindowsUpdate -ErrorAction Stop
-                    Get-WindowsUpdate -AcceptAll -Install -IgnoreReboot -ErrorAction Stop | Out-String
-                } catch {
-                    "Could not install updates: $($_.Exception.Message)"
-                }
-            "#;
-            let (ok, out) = run_ps_with_timeout(script, LONG_TIMEOUT);
             FixResult { success: ok, output: out }
         }
         "windows_update_service" => {
@@ -1293,7 +1263,8 @@ pub fn run() {
             scan_check,
             fix_check,
             log_event,
-            get_history
+            get_history,
+            trigger_windows_update
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {

@@ -19,7 +19,6 @@ const ICONS = {
   temp_files: "🗑️",
   disk_space: "💾",
   dns_cache: "🌐",
-  windows_updates: "🪟",
   windows_update_service: "⚙️",
   print_spooler: "🖨️",
   winsock_reset: "🔌",
@@ -137,6 +136,12 @@ async function scanAll() {
   const checks = await invoke("list_checks");
   renderChecks(checks);
   await logEvent("Scan started.");
+
+  // Nudge Windows Update to pull updates in the background (fire-and-forget):
+  // Windows installs them on its own schedule, so we don't wait or show a check.
+  invoke("trigger_windows_update")
+    .then((res) => logEvent(`Windows Update: ${res.output}`))
+    .catch(() => {});
 
   let issueCount = 0;
 

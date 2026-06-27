@@ -10,7 +10,6 @@ PC Doctor runs a set of checks against your system and reports whether each one 
 - **Temporary Files** — measures and clears space used by temp files
 - **Low Disk Space (C:)** — checks free space and runs disk cleanup if low
 - **DNS Cache** — flushes the DNS resolver cache for connectivity issues
-- **Windows Updates** — checks for and installs available updates
 - **Windows Update Service** — verifies the update service is running, restarts it if not
 - **Print Spooler** — verifies the print spooler is running, restarts it if stuck
 - **Network Stack Reset** — resets Winsock to fix network connectivity issues
@@ -34,6 +33,8 @@ Checks that detect Steam or Epic Games aren't installed report healthy automatic
 
 Each check can be scanned individually or fixed with "Fix All." Scans run several checks concurrently to finish faster. A run history is kept locally so you can see what's been done over time.
 
+Starting a scan also quietly nudges Windows Update to look for updates in the background — Windows downloads and installs them on its own schedule, so PC Doctor never makes you wait on it.
+
 ## Installing on Windows
 
 Download the latest `PC Doctor_x.y.z_x64-setup.exe` from the [Releases page](../../releases) and run it.
@@ -51,7 +52,7 @@ You only have to do this once per download. PC Doctor needs administrator rights
 Each release includes a `SHA256SUMS.txt` file. To confirm your installer wasn't tampered with, open PowerShell where you downloaded it and run:
 
 ```powershell
-Get-FileHash ".\PC Doctor_0.6.1_x64-setup.exe" -Algorithm SHA256
+Get-FileHash ".\PC Doctor_0.6.2_x64-setup.exe" -Algorithm SHA256
 ```
 
 The hash it prints should match the one in `SHA256SUMS.txt` for that file.
@@ -74,4 +75,4 @@ npm run tauri build  # produce a Windows installer
 
 ## Status
 
-Early (v0.6.1). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
+Early (v0.6.2). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
