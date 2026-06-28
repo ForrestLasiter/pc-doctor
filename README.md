@@ -16,7 +16,7 @@ PC Doctor runs a set of checks against your system and reports whether each one 
 - **Windows Update Cache** — clears a bloated or corrupt update download cache
 - **Antivirus Quick Scan** — checks Windows Defender status and runs a quick scan
 - **Startup Programs** — flags apps slowing down boot and opens Task Manager to review them (nothing is disabled automatically)
-- **Corrupted System Files** — flags Windows component-store corruption and repairs it with DISM + SFC
+- **Corrupted System Files** — flags Windows component-store corruption and repairs it with DISM + SFC, running the repair in the background and reporting the result in History
 - **Steam Download Cache** — clears bloated Steam cache that causes stalled downloads or store glitches
 - **Steam Won't Open or Log In** — resets Steam's local client registry, the standard fix for Steam failing to launch or freezing on login
 - **Epic Games Launcher Cache** — clears the launcher's web cache, fixing a blank window or missing library
@@ -52,7 +52,7 @@ You only have to do this once per download. PC Doctor needs administrator rights
 Each release includes a `SHA256SUMS.txt` file. To confirm your installer wasn't tampered with, open PowerShell where you downloaded it and run:
 
 ```powershell
-Get-FileHash ".\PC Doctor_0.6.2_x64-setup.exe" -Algorithm SHA256
+Get-FileHash ".\PC Doctor_0.6.3_x64-setup.exe" -Algorithm SHA256
 ```
 
 The hash it prints should match the one in `SHA256SUMS.txt` for that file.
@@ -75,4 +75,4 @@ npm run tauri build  # produce a Windows installer
 
 ## Status
 
-Early (v0.6.2). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
+Early (v0.6.3). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.

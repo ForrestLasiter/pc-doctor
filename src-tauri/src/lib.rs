@@ -145,7 +145,7 @@ fn checks() -> Vec<CheckInfo> {
         CheckInfo {
             id: "system_file_check",
             name: "Corrupted System Files",
-            description: "Checks Windows' protected system files for corruption — a common cause of random crashes, missing DLL errors, and apps that won't start. The fix runs DISM and SFC repair, which can take 10-30 minutes and may need internet access.",
+            description: "Checks Windows' protected system files for corruption — a common cause of random crashes, missing DLL errors, and apps that won't start. The fix runs the DISM and SFC repair in the background (10-30 minutes) and reports the result in History, so you don't have to wait.",
         },
         CheckInfo {
             id: "gpu_shader_cache",
@@ -1049,86 +1049,74 @@ fn fix_check_blocking(id: String) -> FixResult {
             FixResult { success: ok, output: out }
         }
         "system_file_check" => {
-            // Repairs the component store with DISM (which SFC repairs *from*),
-            // then runs SFC. DISM's repair source is Windows Update, so we make
-            // sure it's reachable: start the WU service and, if a WSUS policy is
-            // redirecting updates (a common cause of error 0x800f0915), bypass it
-            // for the duration of the repair and restore it afterward. Returns a
-            // short verdict prefixed with a machine-readable STATUS line.
+            // SFC/DISM have no OS background scheduler (unlike Windows Update), so
+            // "run in the background" means launching the repair as a detached,
+            // hidden process that survives even if PC Doctor is closed. It writes
+            // its progress and final verdict to the PC Doctor history log, so the
+            // user can close the app and check History later instead of waiting.
+            //
+            // The repair itself is the same robust sequence as before (WSUS bypass
+            // so DISM can reach Windows Update, DISM RestoreHealth, then SFC with a
+            // second pass if needed) - it just logs instead of returning a verdict.
             let script = r#"
-                $ProgressPreference = 'SilentlyContinue'
-                $lines = New-Object System.Collections.ArrayList
-
-                # DISM's repair source is Windows Update - make sure the service is up.
-                try { Start-Service wuauserv -ErrorAction SilentlyContinue } catch {}
-
-                # Temporarily bypass WSUS redirection so DISM can reach Windows Update.
-                $auPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
-                $useWU = $null
-                try { $useWU = (Get-ItemProperty -Path $auPath -Name UseWUServer -ErrorAction Stop).UseWUServer } catch {}
-                if ($useWU -eq 1) {
-                    Set-ItemProperty -Path $auPath -Name UseWUServer -Value 0 -ErrorAction SilentlyContinue
-                    Restart-Service wuauserv -Force -ErrorAction SilentlyContinue
-                }
-
-                # Repair the component store. Output is captured only to inspect it,
-                # never shown, so the progress bars don't flood the result.
-                $dismRaw = & dism.exe /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
-                $dismCode = $LASTEXITCODE
-                $dismOk = ($dismCode -eq 0)
-
-                # Restore the WSUS setting we changed.
-                if ($useWU -eq 1) {
-                    Set-ItemProperty -Path $auPath -Name UseWUServer -Value 1 -ErrorAction SilentlyContinue
-                    Restart-Service wuauserv -Force -ErrorAction SilentlyContinue
-                }
-
-                if ($dismOk) {
-                    [void]$lines.Add("DISM: Windows component store is healthy.")
-                } elseif ($dismRaw -match "0x800f0915" -or $dismRaw -match "could not be found") {
-                    [void]$lines.Add("DISM: couldn't download repair files (error 0x800f0915).")
-                    [void]$lines.Add("Connect to the internet and turn off any VPN or work/metered network, then run this again. If it keeps failing, the repair may need a Windows installation ISO as a source.")
-                } else {
-                    [void]$lines.Add("DISM: repair didn't complete. Check your internet connection and try again.")
-                }
-
-                function Get-SfcResult {
-                    $raw = & sfc.exe /scannow | Out-String
-                    # SFC prints with embedded spacer characters; strip non-ASCII.
-                    $clean = ($raw -replace "[^\x20-\x7E\r\n]", "")
-                    if ($clean -match "did not find any integrity violations") { return "clean" }
-                    if ($clean -match "successfully repaired")                 { return "repaired" }
-                    if ($clean -match "unable to fix")                         { return "partial" }
-                    if ($clean -match "could not perform")                     { return "error" }
-                    return "unknown"
-                }
-
-                # SFC repairs from the store DISM just fixed. If the store was healthy
-                # but a first pass couldn't fix everything, a second pass often clears it.
-                $res = Get-SfcResult
-                if ($res -eq "partial" -and $dismOk) { $res = Get-SfcResult }
-
-                switch ($res) {
-                    "clean"    { [void]$lines.Add("SFC: no integrity violations - your system files are intact.") }
-                    "repaired" { [void]$lines.Add("SFC: found and repaired corrupted system files. Restart your PC to finish.") }
-                    "partial"  { [void]$lines.Add("SFC: fixed what it could, but some files remain. Restart and run this again; if it persists, run it once in Safe Mode.") }
-                    "error"    { [void]$lines.Add("SFC: couldn't run (another repair may be pending). Restart your PC and try again.") }
-                    default    { [void]$lines.Add("SFC: finished. Details are in C:\Windows\Logs\CBS\CBS.log.") }
-                }
-
-                if ($dismOk -and ($res -eq "clean" -or $res -eq "repaired")) { $status = "ok" }
-                elseif (-not $dismOk -and ($res -eq "partial" -or $res -eq "error")) { $status = "fail" }
-                else { $status = "warn" }
-
-                "STATUS:$status`n" + ($lines -join "`n")
+                $work = Join-Path $env:TEMP "pcdoctor-sfc-repair.ps1"
+                $repair = @'
+$ProgressPreference = "SilentlyContinue"
+$logDir = Join-Path $env:LOCALAPPDATA "PCDoctor"
+$log = Join-Path $logDir "history.log"
+try { New-Item -ItemType Directory -Path $logDir -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
+function Log($m) {
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    try { Add-Content -Path $log -Value "[$ts] $m" -ErrorAction Stop } catch {}
+}
+Log "System file repair started in the background (this can take 10-30 minutes)."
+try { Start-Service wuauserv -ErrorAction SilentlyContinue } catch {}
+$auPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
+$useWU = $null
+try { $useWU = (Get-ItemProperty -Path $auPath -Name UseWUServer -ErrorAction Stop).UseWUServer } catch {}
+if ($useWU -eq 1) {
+    Set-ItemProperty -Path $auPath -Name UseWUServer -Value 0 -ErrorAction SilentlyContinue
+    Restart-Service wuauserv -Force -ErrorAction SilentlyContinue
+}
+$dismRaw = & dism.exe /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
+$dismOk = ($LASTEXITCODE -eq 0)
+if ($useWU -eq 1) {
+    Set-ItemProperty -Path $auPath -Name UseWUServer -Value 1 -ErrorAction SilentlyContinue
+    Restart-Service wuauserv -Force -ErrorAction SilentlyContinue
+}
+if ($dismOk) {
+    Log "DISM: Windows component store is healthy."
+} elseif ($dismRaw -match "0x800f0915" -or $dismRaw -match "could not be found") {
+    Log "DISM: couldn't download repair files (0x800f0915). Connect to the internet with any VPN/work network off, then run System File repair again."
+} else {
+    Log "DISM: repair didn't complete - check your internet connection and run it again."
+}
+function Get-SfcResult {
+    $raw = & sfc.exe /scannow | Out-String
+    $clean = ($raw -replace "[^\x20-\x7E\r\n]", "")
+    if ($clean -match "did not find any integrity violations") { return "clean" }
+    if ($clean -match "successfully repaired")                 { return "repaired" }
+    if ($clean -match "unable to fix")                         { return "partial" }
+    if ($clean -match "could not perform")                     { return "error" }
+    return "unknown"
+}
+$res = Get-SfcResult
+if ($res -eq "partial" -and $dismOk) { $res = Get-SfcResult }
+switch ($res) {
+    "clean"    { Log "System file repair complete: no problems found - your system files are intact." }
+    "repaired" { Log "System file repair complete: found and repaired corrupted files. Restart your PC to finish." }
+    "partial"  { Log "System file repair: fixed what it could, but some files remain. Restart and run it again; if it persists, run it once in Safe Mode." }
+    "error"    { Log "System file repair couldn't run (another repair may be pending). Restart your PC and try again." }
+    default    { Log "System file repair finished. Details are in C:\Windows\Logs\CBS\CBS.log." }
+}
+Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+'@
+                Set-Content -Path $work -Value $repair -Encoding UTF8 -ErrorAction SilentlyContinue
+                Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -ArgumentList "-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-File","`"$work`""
+                "System file repair is now running in the background. It can take 10-30 minutes - you can keep using your PC or even close PC Doctor. The result will appear in History when it finishes."
             "#;
-            let (ok, out) = run_ps_with_timeout(script, REPAIR_TIMEOUT);
-            if !ok {
-                return FixResult { success: false, output: out };
-            }
-            let (status_line, body) = out.split_once('\n').unwrap_or(("", out.as_str()));
-            let success = status_line.trim() == "STATUS:ok";
-            FixResult { success, output: body.trim().to_string() }
+            let (ok, out) = run_ps(script);
+            FixResult { success: ok, output: out }
         }
         "gpu_shader_cache" => {
             let script = r#"
