@@ -270,16 +270,31 @@ fn list_checks() -> Vec<CheckInfo> {
     checks()
 }
 
+const HISTORY_MAX_LINES: usize = 500;
+
 fn log_event_blocking(text: String) -> bool {
     let Some(path) = history_path() else {
         return false;
     };
-    let (_, ts) = run_ps("Get-Date -Format \"yyyy-MM-dd HH:mm:ss\"");
-    let line = format!("[{}] {}\n", ts.trim(), text);
-    match OpenOptions::new().create(true).append(true).open(&path) {
+    // Native timestamp - the old code spawned a whole PowerShell process just
+    // to run Get-Date, adding ~200ms of overhead to every logged event.
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let line = format!("[{}] {}\n", ts, text);
+    let ok = match OpenOptions::new().create(true).append(true).open(&path) {
         Ok(mut f) => f.write_all(line.as_bytes()).is_ok(),
         Err(_) => false,
+    };
+    // Keep the log from growing unbounded: trim to the newest entries.
+    if ok {
+        if let Ok(content) = fs::read_to_string(&path) {
+            let lines: Vec<&str> = content.lines().collect();
+            if lines.len() > HISTORY_MAX_LINES {
+                let keep = lines[lines.len() - HISTORY_MAX_LINES..].join("\n") + "\n";
+                let _ = fs::write(&path, keep);
+            }
+        }
     }
+    ok
 }
 
 #[tauri::command]
@@ -290,11 +305,13 @@ async fn log_event(text: String) -> bool {
 }
 
 #[tauri::command]
-fn get_history() -> String {
-    match history_path() {
+async fn get_history() -> String {
+    tauri::async_runtime::spawn_blocking(|| match history_path() {
         Some(path) => fs::read_to_string(&path).unwrap_or_default(),
         None => String::new(),
-    }
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[tauri::command]

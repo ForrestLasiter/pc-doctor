@@ -52,7 +52,7 @@ You only have to do this once per download. PC Doctor needs administrator rights
 Each release includes a `SHA256SUMS.txt` file. To confirm your installer wasn't tampered with, open PowerShell where you downloaded it and run:
 
 ```powershell
-Get-FileHash ".\PC Doctor_0.6.3_x64-setup.exe" -Algorithm SHA256
+Get-FileHash ".\PC Doctor_0.7.0_x64-setup.exe" -Algorithm SHA256
 ```
 
 The hash it prints should match the one in `SHA256SUMS.txt` for that file.
@@ -75,4 +75,4 @@ npm run tauri build  # produce a Windows installer
 
 ## Status
 
-Early (v0.6.3). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
+Early (v0.7.0). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
