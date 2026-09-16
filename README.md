@@ -29,11 +29,19 @@ PC Doctor runs a set of checks against your system and reports whether each one 
 - **Battery Health** — on laptops, reports how much battery capacity has been lost to wear; skipped on desktops
 - **Memory (RAM)** — reports installed memory and recent hardware errors, and can launch Windows Memory Diagnostic to test for faulty RAM
 
-Checks that detect Steam or Epic Games aren't installed report healthy automatically rather than showing a false issue. Hardware checks that can't be fixed in software (a failing drive, worn battery) instead point you to the right next step.
+Checks that detect Steam or Epic Games aren't installed are marked unavailable rather than showing a false issue. Hardware checks that can't be fixed in software (a failing drive, worn battery) instead point you to the right next step.
 
-Each check can be scanned individually or fixed with "Fix All." Scans run several checks concurrently to finish faster. A run history is kept locally so you can see what's been done over time.
+### How fixes run
 
-Starting a scan also quietly nudges Windows Update to look for updates in the background — Windows downloads and installs them on its own schedule, so PC Doctor never makes you wait on it.
+Each check is tagged by how its fix behaves, so nothing disruptive ever happens without your say-so:
+
+- **Automatic fixes** (temp files, caches, service restarts, DNS flush, background system-file repair) are the only ones **"Fix All"** runs. Scanning is read-only; it never changes anything.
+- **Guided fixes** (startup programs, driver health, disk/SMART, device problems, battery, memory) open the right Windows tool or vendor page for you. These are never batched — you click them one at a time.
+- **Manual fixes** (Network Stack Reset, Restart Graphics Driver) are disruptive — a dropped connection, a black screen — so they ask for confirmation each time and are never batched.
+
+A restore point is created automatically before any automatic fix. If it can't be created, PC Doctor tells you and asks before continuing. Fixes that fail are reported as failed (not silently "successful") and stay retryable. Scans run several checks concurrently to finish faster, and a run history is kept locally so you can see what's been done over time.
+
+The **Windows Update** button asks Windows to look for updates in the background — Windows downloads and installs them on its own schedule, so PC Doctor never makes you wait. This is a deliberate button press, not something scanning does behind your back.
 
 ## Installing on Windows
 
@@ -45,14 +53,14 @@ Download the latest `PC Doctor_x.y.z_x64-setup.exe` from the [Releases page](../
 2. Click **Run anyway**.
 3. Follow the setup wizard (Next → Install → Finish).
 
-You only have to do this once per download. PC Doctor needs administrator rights to repair Windows components, so you'll also get a "Do you want to allow this app to make changes?" prompt — click **Yes**.
+You only have to do this once per download. PC Doctor needs administrator rights to repair Windows components, so it launches elevated — you'll get a "Do you want to allow this app to make changes?" prompt, so click **Yes**. If it ever runs without admin rights, a banner at the top warns you that some repairs may fail and how to restart it elevated.
 
 ### Verifying your download (optional)
 
 Each release includes a `SHA256SUMS.txt` file. To confirm your installer wasn't tampered with, open PowerShell where you downloaded it and run:
 
 ```powershell
-Get-FileHash ".\PC Doctor_0.7.0_x64-setup.exe" -Algorithm SHA256
+Get-FileHash ".\PC Doctor_0.8.0_x64-setup.exe" -Algorithm SHA256
 ```
 
 The hash it prints should match the one in `SHA256SUMS.txt` for that file.
@@ -73,6 +81,19 @@ npm run tauri dev    # run in development
 npm run tauri build  # produce a Windows installer
 ```
 
+### Tests & CI
+
+The Rust library has unit tests covering fix-result parsing and check classification:
+
+```bash
+cd src-tauri
+cargo test --lib
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+```
+
+GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs formatting, Clippy, the Rust tests, a JS syntax check, and a full Windows build on every push and pull request.
+
 ## Status
 
-Early (v0.7.0). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
+Early (v0.8.0). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.

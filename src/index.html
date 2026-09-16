@@ -21,9 +21,18 @@
         <div class="header-actions">
           <button id="scan-btn" class="btn-primary">Scan for problems</button>
           <button id="fix-all-btn" class="btn-accent" disabled>Fix All</button>
+          <button id="update-btn" class="btn-ghost">Windows Update</button>
           <button id="history-btn" class="btn-ghost">History</button>
         </div>
       </header>
+      <div id="elevation-banner" class="elevation-banner hidden">
+        <span class="elevation-icon">⚠️</span>
+        <div class="elevation-text">
+          <strong>Not running as administrator.</strong>
+          Some repairs (services, system files, Windows Update cache) need admin rights and
+          may fail. Close PC Doctor, right-click it, and choose <em>Run as administrator</em>.
+        </div>
+      </div>
       <p id="status-line" class="status-line">Click "Scan for problems" to begin.</p>
       <div id="summary-bar" class="summary-bar hidden">
         <span class="summary-pill summary-ok"><strong id="summary-ok-count">0</strong> healthy</span>

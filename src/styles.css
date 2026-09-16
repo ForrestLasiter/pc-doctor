@@ -138,6 +138,29 @@ button:disabled {
   background: transparent;
 }
 
+.elevation-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  margin-bottom: 1rem;
+  padding: 0.7rem 0.9rem;
+  border: 3px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.elevation-icon {
+  font-size: 1.2rem;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.elevation-text {
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
 .status-line {
   color: var(--muted);
   margin: 0 0 0.9rem;
@@ -198,6 +221,14 @@ button:disabled {
 
 .check-item:has(.badge-fixed) {
   border-left-color: var(--fixed);
+}
+
+.check-item:has(.badge-action) {
+  border-left-color: var(--accent);
+}
+
+.check-item:has(.badge-unavailable) {
+  border-left-color: var(--muted);
 }
 
 .check-item:has(.badge-scanning),
@@ -313,6 +344,16 @@ button:disabled {
 .badge-fixed {
   background: var(--fixed-bg);
   color: var(--fixed);
+}
+
+.badge-action {
+  background: var(--fixed-bg);
+  color: var(--accent);
+}
+
+.badge-unavailable {
+  background: var(--panel-2);
+  color: var(--muted);
 }
 
 .badge-scanning,
