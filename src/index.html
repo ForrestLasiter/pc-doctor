@@ -23,8 +23,24 @@
           <button id="fix-all-btn" class="btn-accent" disabled>Fix All</button>
           <button id="update-btn" class="btn-ghost">Windows Update</button>
           <button id="history-btn" class="btn-ghost">History</button>
+          <button id="app-update-btn" class="btn-ghost">Check for updates</button>
         </div>
       </header>
+      <div id="update-banner" class="update-banner hidden" role="status" aria-live="polite">
+        <div class="update-text">
+          <strong id="update-title"></strong>
+          <span id="update-detail"></span>
+          <details id="update-notes-wrap" class="hidden">
+            <summary>What is in it</summary>
+            <pre id="update-notes" class="update-notes" tabindex="0"></pre>
+          </details>
+          <div id="update-progress" class="progress-track hidden"><div class="progress-bar"></div></div>
+        </div>
+        <div class="update-actions">
+          <button id="update-install-btn" class="btn-primary hidden">Download and install</button>
+          <button id="update-dismiss-btn" class="btn-ghost">Close</button>
+        </div>
+      </div>
       <div id="elevation-banner" class="elevation-banner hidden">
         <span class="elevation-icon">⚠️</span>
         <div class="elevation-text">

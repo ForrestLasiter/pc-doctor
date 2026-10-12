@@ -8,6 +8,8 @@ use std::process::Command;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::Duration;
 
+mod update;
+
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const LONG_TIMEOUT: Duration = Duration::from_secs(300);
@@ -374,6 +376,78 @@ async fn check_elevation() -> bool {
     })
     .await
     .unwrap_or(false)
+}
+
+// The installer found by the last update check. The page only ever names the
+// step; what is downloaded and run is decided here, from GitHub's answer.
+fn latest_installer() -> &'static Mutex<Option<update::Installer>> {
+    static LATEST: OnceLock<Mutex<Option<update::Installer>>> = OnceLock::new();
+    LATEST.get_or_init(|| Mutex::new(None))
+}
+
+fn current_version() -> String {
+    // Development builds can pretend to be an old version, to see an update offered.
+    if cfg!(debug_assertions) {
+        if let Ok(v) = std::env::var("PCDOCTOR_PRETEND_VERSION") {
+            return v;
+        }
+    }
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+fn app_version() -> String {
+    current_version()
+}
+
+/// Asks GitHub whether a newer PC Doctor has been released. Never downloads
+/// or installs anything by itself.
+#[tauri::command]
+async fn check_update() -> Result<update::UpdateInfo, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let (installer, info) = update::check_latest(&current_version())?;
+        *latest_installer().lock().unwrap_or_else(|p| p.into_inner()) =
+            info.available.then_some(installer);
+        Ok(info)
+    })
+    .await
+    .unwrap_or_else(|_| Err("Internal error checking for updates.".into()))
+}
+
+/// Downloads the update found by `check_update`, verifies it, starts the
+/// installer and closes PC Doctor so its files can be replaced.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<String, String> {
+    if cfg!(debug_assertions) {
+        return Err(
+            "This copy is running from source, so it cannot install an update over itself.".into(),
+        );
+    }
+    let installer = latest_installer()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .ok_or("There is no update to install. Check for updates first.")?;
+    let version = installer.version.clone();
+    let path = tauri::async_runtime::spawn_blocking(move || update::download_installer(&installer))
+        .await
+        .unwrap_or_else(|_| Err("Internal error downloading the update.".into()))?;
+    Command::new(&path)
+        .spawn()
+        .map_err(|e| format!("The installer could not be started: {}", e))?;
+    log_event_blocking(format!(
+        "Update: started the installer for version {}.",
+        version
+    ));
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(600));
+        kill_all_active_powershell();
+        app.exit(0);
+    });
+    Ok(format!(
+        "Starting the installer for version {} and closing PC Doctor...",
+        version
+    ))
 }
 
 const HISTORY_MAX_LINES: usize = 500;
@@ -1540,7 +1614,10 @@ pub fn run() {
             log_event,
             get_history,
             trigger_windows_update,
-            check_elevation
+            check_elevation,
+            app_version,
+            check_update,
+            install_update
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {

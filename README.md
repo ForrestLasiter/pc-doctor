@@ -43,6 +43,10 @@ A restore point is created automatically before any automatic fix. If it can't b
 
 The **Windows Update** button asks Windows to look for updates in the background — Windows downloads and installs them on its own schedule, so PC Doctor never makes you wait. This is a deliberate button press, not something scanning does behind your back.
 
+### Updates
+
+PC Doctor asks github.com once each time it opens whether a newer version has been released, and shows a banner if there is one. The **Check for updates** button does the same on demand. It never downloads or installs anything by itself: when you choose **Download and install**, it downloads the installer from this repository's releases, checks it against the size and SHA-256 that GitHub lists, then starts it and closes. Nothing about you or your PC is sent.
+
 ## Installing on Windows
 
 Download the latest `PC Doctor_x.y.z_x64-setup.exe` from the [Releases page](../../releases) and run it.
@@ -60,14 +64,14 @@ You only have to do this once per download. PC Doctor needs administrator rights
 Each release includes a `SHA256SUMS.txt` file. To confirm your installer wasn't tampered with, open PowerShell where you downloaded it and run:
 
 ```powershell
-Get-FileHash ".\PC Doctor_0.8.0_x64-setup.exe" -Algorithm SHA256
+Get-FileHash ".\PC Doctor_0.9.0_x64-setup.exe" -Algorithm SHA256
 ```
 
 The hash it prints should match the one in `SHA256SUMS.txt` for that file.
 
 ## Why
 
-Most "PC cleaner" tools are bloated, ad-laden, or push you toward paid upsells for things Windows can already do for free via PowerShell. PC Doctor is meant to be a small, transparent alternative: every scan and fix is a short, readable PowerShell command (visible in [`src-tauri/src/lib.rs`](src-tauri/src/lib.rs)), there's no telemetry or bundled third-party software, and nothing is changed on your system without you clicking a button.
+Most "PC cleaner" tools are bloated, ad-laden, or push you toward paid upsells for things Windows can already do for free via PowerShell. PC Doctor is meant to be a small, transparent alternative: every scan and fix is a short, readable PowerShell command (visible in [`src-tauri/src/lib.rs`](src-tauri/src/lib.rs)), there's no telemetry or bundled third-party software (the only network request the app makes on its own is the update check described above), and nothing is changed on your system without you clicking a button.
 
 ## Tech stack
 
@@ -96,4 +100,4 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs for
 
 ## Status
 
-Early (v0.8.0). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
+Early (v0.9.0). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.

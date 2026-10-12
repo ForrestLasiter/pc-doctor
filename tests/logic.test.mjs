@@ -49,3 +49,42 @@ test("only manual fixes require confirmation", () => {
   assert.equal(needsConfirmation("guided"), false);
   assert.equal(needsConfirmation("restore"), false);
 });
+
+import { formatMB, updateBannerView } from "../src/logic.js";
+
+const info = { version: "0.9.0", current: "0.8.0", size: 1401924, notes: "Notes", can_install: true };
+
+test("formatMB shows one decimal", () => {
+  assert.equal(formatMB(1401924), "1.3 MB");
+});
+
+test("update banner offers the install only when an update is available", () => {
+  const available = updateBannerView("available", info);
+  assert.equal(available.showInstall, true);
+  assert.equal(available.installEnabled, true);
+  assert.equal(available.dismissLabel, "Not now");
+  assert.match(available.title, /0\.9\.0/);
+  assert.equal(available.notes, "Notes");
+
+  const current = updateBannerView("current", { ...info, version: "0.8.0" });
+  assert.equal(current.showInstall, false);
+  assert.match(current.title, /up to date/);
+});
+
+test("update banner cannot install from a source copy", () => {
+  const view = updateBannerView("available", { ...info, can_install: false });
+  assert.equal(view.showInstall, true);
+  assert.equal(view.installEnabled, false);
+});
+
+test("update banner locks while downloading and reports errors", () => {
+  const downloading = updateBannerView("downloading", info);
+  assert.equal(downloading.busy, true);
+  assert.equal(downloading.installEnabled, false);
+  assert.equal(downloading.canDismiss, false);
+
+  const error = updateBannerView("error", null, "Could not reach GitHub.");
+  assert.equal(error.error, true);
+  assert.equal(error.detail, "Could not reach GitHub.");
+  assert.equal(error.showInstall, false);
+});

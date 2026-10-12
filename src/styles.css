@@ -161,6 +161,55 @@ button:disabled {
   line-height: 1.35;
 }
 
+.update-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  padding: 0.7rem 0.9rem;
+  border: 3px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+  background: var(--fixed-bg);
+  color: var(--text);
+}
+
+.update-banner.update-error {
+  background: var(--bad-bg);
+}
+
+.update-text {
+  flex: 1;
+  min-width: 240px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.update-text summary {
+  cursor: pointer;
+  margin-top: 0.4rem;
+  font-weight: 700;
+}
+
+.update-notes {
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 0.78rem;
+  margin: 0.4rem 0 0;
+  padding: 0.5rem;
+  border: 2px solid var(--ink);
+  background: var(--panel);
+}
+
+.update-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
 .status-line {
   color: var(--muted);
   margin: 0 0 0.9rem;
@@ -423,6 +472,10 @@ button:disabled {
 
   h1 {
     color: var(--accent-2);
+  }
+
+  button {
+    color: var(--text);
   }
 
   .btn-primary,

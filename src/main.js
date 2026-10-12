@@ -1,4 +1,4 @@
-import { isActionable, fixButtonLabel, needsConfirmation } from "./logic.js";
+import { isActionable, fixButtonLabel, needsConfirmation, updateBannerView } from "./logic.js";
 
 const { invoke } = window.__TAURI__.core;
 
@@ -329,6 +329,64 @@ async function checkElevation() {
   elevationBanner.classList.toggle("hidden", elevated);
 }
 
+let updateInfo = null;
+
+function renderUpdate(phase, message) {
+  const view = updateBannerView(phase, updateInfo, message);
+  const $ = (id) => document.querySelector(id);
+  $("#update-title").textContent = view.title;
+  $("#update-detail").textContent = view.detail;
+  $("#update-notes").textContent = view.notes;
+  $("#update-notes-wrap").classList.toggle("hidden", !view.notes);
+  $("#update-progress").classList.toggle("hidden", !view.busy);
+  const banner = $("#update-banner");
+  banner.classList.toggle("update-error", view.error);
+  banner.setAttribute("role", view.error ? "alert" : "status");
+  banner.classList.remove("hidden");
+  const installBtn = $("#update-install-btn");
+  installBtn.classList.toggle("hidden", !view.showInstall);
+  installBtn.disabled = !view.installEnabled;
+  const dismissBtn = $("#update-dismiss-btn");
+  dismissBtn.textContent = view.dismissLabel;
+  dismissBtn.disabled = !view.canDismiss;
+}
+
+// quiet = the check made at launch: say nothing unless there is an update.
+async function checkForUpdate(quiet) {
+  const btn = document.querySelector("#app-update-btn");
+  btn.disabled = true;
+  if (!quiet) renderUpdate("checking");
+  try {
+    updateInfo = await invoke("check_update");
+    if (updateInfo.available) {
+      renderUpdate("available");
+      await logEvent(`Update: version ${updateInfo.version} is available (you have ${updateInfo.current}).`);
+    } else if (!quiet) {
+      renderUpdate("current");
+    }
+  } catch (e) {
+    if (!quiet) renderUpdate("error", String(e));
+  }
+  btn.disabled = false;
+}
+
+async function installUpdate() {
+  if (checkList.querySelector(".badge-fixing, .badge-scanning")) {
+    renderUpdate("error", "A scan or fix is still running. Wait for it to finish, then check for updates again.");
+    return;
+  }
+  renderUpdate("downloading");
+  const before = [scanBtn.disabled, fixAllBtn.disabled];
+  scanBtn.disabled = true;
+  fixAllBtn.disabled = true;
+  try {
+    await invoke("install_update");
+  } catch (e) {
+    renderUpdate("error", String(e));
+    [scanBtn.disabled, fixAllBtn.disabled] = before;
+  }
+}
+
 async function showHistory() {
   const content = await invoke("get_history");
   historyContent.textContent = content || "No history yet.";
@@ -360,5 +418,12 @@ window.addEventListener("DOMContentLoaded", () => {
   historyBtn.addEventListener("click", showHistory);
   closeHistoryBtn.addEventListener("click", hideHistory);
 
+  document.querySelector("#app-update-btn").addEventListener("click", () => checkForUpdate(false));
+  document.querySelector("#update-install-btn").addEventListener("click", installUpdate);
+  document.querySelector("#update-dismiss-btn").addEventListener("click", () => {
+    document.querySelector("#update-banner").classList.add("hidden");
+  });
+
   checkElevation();
+  checkForUpdate(true);
 });
