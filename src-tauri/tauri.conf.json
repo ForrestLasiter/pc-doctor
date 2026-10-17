@@ -26,6 +26,8 @@
     "active": true,
     "targets": "all",
     "publisher": "Forrest Lasiter",
+    "copyright": "Copyright (c) 2026 Forrest Lasiter. Released under the MIT License.",
+    "license": "MIT",
     "shortDescription": "Scan and fix common Windows problems",
     "longDescription": "PC Doctor scans your PC for common issues (temp file bloat, low disk space, stuck services, pending Windows updates, malware) and fixes them with one click.",
     "icon": [

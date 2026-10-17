@@ -101,3 +101,7 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs for
 ## Status
 
 Early (v0.9.0). Built and tested on Windows only. See [Releases](../../releases) for the latest installer and changelog.
+
+## License
+
+PC Doctor is free and open-source under the [MIT License](LICENSE). You can use, copy, modify, and share it, including in your own projects, as long as you keep the copyright and license notice. It comes with no warranty: it changes Windows settings and deletes cache files, so create a restore point (PC Doctor does this for you before automatic fixes) and use it at your own risk.

@@ -2,6 +2,7 @@
   "name": "pc-doctor",
   "private": true,
   "version": "0.9.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "tauri": "tauri",
